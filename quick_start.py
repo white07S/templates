@@ -519,5 +519,248 @@ def test_feedback_mechanism():
     except Exception as e:
         print_colored(f"❌ Feedback test failed: {e}", 'RED')
 
+
+def test_feedback_mechanism():
+    """Test the feedback mechanism with pre-agent instructions and post-agent feedback"""
+    print_header("Testing Feedback Mechanism (Pre & Post Agent)")
+    
+    # Create a single-agent workflow for feedback testing
+    request_data = {
+        "agents": [
+            {
+                "name": "Math_Calculator",
+                "persona": "You are a helpful calculator who solves math problems step by step with clear explanations.",
+                "task": "Solve mathematical problems with detailed explanations, showing all work and reasoning."
+            },
+            {
+                "name": "Concept_Explainer", 
+                "persona": "You are an educational specialist who explains mathematical concepts clearly.",
+                "task": "Explain the underlying concepts and provide additional examples."
+            },
+            {
+                "name": "Story_Creator",
+                "persona": "You are a creative writer who creates engaging stories based on mathematical concepts.", 
+                "task": "Create an interesting story or real-world scenario that incorporates the mathematical concepts discussed."
+            }
+        ],
+        "initial_task": "Calculate 15% of 240 and explain how to calculate percentages in general."
+    }
+    
+    try:
+        print_colored("📤 Starting new workflow for feedback test...", 'BLUE')
+        response = requests.post(f"{BASE_URL}/api/v1/agentic-ai", json=request_data, timeout=60)
+        
+        if response.status_code != 200:
+            print_colored(f"❌ Failed to start feedback test workflow: {response.status_code}", 'RED')
+            print(response.text)
+            return
+            
+        result = response.json()
+        session_id = result['session_id']
+        
+        print_colored(f"✅ Initial response from {result['current_agent_name']}:", 'GREEN')
+        print(result['response'][:400] + "..." if len(result['response']) > 400 else result['response'])
+        
+        # Wait for agent to complete
+        if not wait_for_agent_completion(session_id, 0):
+            return
+            
+        # POST-AGENT FEEDBACK LOOP for Agent 1
+        agent1_satisfied = False
+        while not agent1_satisfied:
+            print_colored("\n💬 Agent 1 (Math Calculator) - Post-Agent Options:", 'CYAN')
+            print("1. Provide feedback to improve the response")
+            print("2. Satisfied - Continue to next agent")
+            
+            choice = input("\nEnter your choice (1-2): ").strip()
+            
+            if choice == "1":
+                # Get feedback from user
+                print_colored("\n📝 Enter your feedback for the Math Calculator:", 'YELLOW')
+                print("(Example: 'Can you also show the decimal method and explain when to use different approaches?')")
+                user_feedback = input("Your feedback: ").strip()
+                
+                if user_feedback:
+                    feedback_data = {
+                        "session_id": session_id,
+                        "agent_index": 0,
+                        "feedback": user_feedback
+                    }
+                    
+                    print_colored("\n🔄 Processing your feedback...", 'YELLOW')
+                    feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                    
+                    if feedback_response.status_code == 200:
+                        feedback_result = feedback_response.json()
+                        print_colored("✅ Feedback processed! Updated response:", 'GREEN')
+                        print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                        # Continue the loop to ask if they want more feedback or are satisfied
+                    else:
+                        print_colored(f"❌ Feedback failed: {feedback_response.status_code}", 'RED')
+                        print(feedback_response.text)
+                        # Continue the loop to try again
+                else:
+                    print_colored("⚠️ No feedback provided.", 'YELLOW')
+                    # Continue the loop to ask again
+                    
+            elif choice == "2":
+                print_colored("✅ Agent 1 completed. Ready for Agent 2.", 'GREEN')
+                agent1_satisfied = True
+            else:
+                print_colored("❌ Invalid choice. Please enter 1 or 2.", 'RED')
+
+        # PRE-AGENT INSTRUCTIONS for Agent 2
+        print_colored("\n🎯 PRE-AGENT 2 Instructions (Optional):", 'PURPLE')
+        print("Before Agent 2 (Concept Explainer) runs, you can provide additional instructions.")
+        print("Examples:")
+        print("- 'Focus on real-world applications'")
+        print("- 'Include examples from business/finance'") 
+        print("- 'Make it suitable for teenagers'")
+        
+        pre_agent2_choice = input("\nProvide pre-agent instructions? (y/n): ").strip().lower()
+        pre_agent2_instructions = ""
+        
+        if pre_agent2_choice in ['y', 'yes']:
+            pre_agent2_instructions = input("Your instructions for Agent 2: ").strip()
+            if pre_agent2_instructions:
+                print_colored(f"✅ Pre-agent instructions recorded: {pre_agent2_instructions}", 'GREEN')
+                
+                # If API supports pre-agent instructions, we'd modify the next agent call
+                # For now, we'll simulate by adding to the task context
+                
+        # Continue to next agent
+        print_colored("\n➡️ Moving to next agent (Concept Explainer)...", 'YELLOW')
+        
+        # Construct next agent call with pre-instructions if provided
+        if pre_agent2_instructions:
+            # Option 1: If API supports additional context
+            next_data = {
+                "session_id": session_id,
+                "additional_context": f"ADDITIONAL INSTRUCTIONS: {pre_agent2_instructions}"
+            }
+            next_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/next", json=next_data, timeout=60)
+        else:
+            # Option 2: Standard next call
+            next_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/next?session_id={session_id}", timeout=60)
+        
+        if next_response.status_code == 200:
+            next_result = next_response.json()
+            print_colored(f"🤖 {next_result['current_agent_name']} response:", 'PURPLE')
+            if pre_agent2_instructions:
+                print_colored(f"   (With pre-instructions: {pre_agent2_instructions[:50]}...)", 'BLUE')
+            print(next_result['response'][:400] + "..." if len(next_result['response']) > 400 else next_result['response'])
+            
+            # Wait for agent 2 to complete
+            if not wait_for_agent_completion(session_id, 1):
+                return
+            
+            # POST-AGENT FEEDBACK LOOP for Agent 2
+            agent2_satisfied = False
+            while not agent2_satisfied:
+                print_colored("\n💬 Agent 2 (Concept Explainer) - Post-Agent Options:", 'CYAN')
+                print("1. Provide feedback to improve the response")
+                print("2. Satisfied - Continue to next agent")
+                
+                choice = input("\nEnter your choice (1-2): ").strip()
+                
+                if choice == "1":
+                    print_colored("\n📝 Enter your feedback for the Concept Explainer:", 'YELLOW')
+                    print("(Example: 'Can you provide more real-world examples of when percentages are used?')")
+                    user_feedback = input("Your feedback: ").strip()
+                    
+                    if user_feedback:
+                        feedback_data = {
+                            "session_id": session_id,
+                            "agent_index": 1,
+                            "feedback": user_feedback
+                        }
+                        
+                        print_colored("\n🔄 Processing your feedback...", 'YELLOW')
+                        feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                        
+                        if feedback_response.status_code == 200:
+                            feedback_result = feedback_response.json()
+                            print_colored("✅ Feedback processed! Updated response:", 'GREEN')
+                            print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                        else:
+                            print_colored(f"❌ Feedback failed: {feedback_response.status_code}", 'RED')
+                            print(feedback_response.text)
+                    else:
+                        print_colored("⚠️ No feedback provided.", 'YELLOW')
+                        
+                elif choice == "2":
+                    print_colored("✅ Agent 2 completed. Ready for Agent 3.", 'GREEN')
+                    agent2_satisfied = True
+                else:
+                    print_colored("❌ Invalid choice. Please enter 1 or 2.", 'RED')
+
+            # PRE-AGENT INSTRUCTIONS for Agent 3 (Story Creator)
+            print_colored("\n🎯 PRE-AGENT 3 Instructions (Optional):", 'PURPLE')
+            print("Before Agent 3 (Story Creator) runs, you can provide specific instructions.")
+            print("Examples for story creation:")
+            print("- 'Create a story about a shopping scenario'")
+            print("- 'Focus on a business/investment theme'")
+            print("- 'Make it a detective story involving percentages'")
+            print("- 'Use the calculation methods from Agent 1'")
+            
+            pre_agent3_choice = input("\nProvide pre-agent instructions? (y/n): ").strip().lower()
+            pre_agent3_instructions = ""
+            
+            if pre_agent3_choice in ['y', 'yes']:
+                pre_agent3_instructions = input("Your instructions for Agent 3: ").strip()
+                if pre_agent3_instructions:
+                    print_colored(f"✅ Pre-agent instructions recorded: {pre_agent3_instructions}", 'GREEN')
+
+            # Continue to Agent 3
+            print_colored("\n➡️ Moving to final agent (Story Creator)...", 'YELLOW')
+            
+            if pre_agent3_instructions:
+                next_data = {
+                    "session_id": session_id,
+                    "additional_context": f"STORY INSTRUCTIONS: {pre_agent3_instructions}"
+                }
+                final_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/next", json=next_data, timeout=60)
+            else:
+                final_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/next?session_id={session_id}", timeout=60)
+            
+            if final_response.status_code == 200:
+                final_result = final_response.json()
+                print_colored(f"🤖 {final_result['current_agent_name']} response:", 'PURPLE')
+                if pre_agent3_instructions:
+                    print_colored(f"   (With pre-instructions: {pre_agent3_instructions[:50]}...)", 'BLUE')
+                print(final_result['response'][:400] + "..." if len(final_result['response']) > 400 else final_result['response'])
+                
+                # Wait for agent 3 to complete
+                if not wait_for_agent_completion(session_id, 2):
+                    return
+                
+                # POST-AGENT FEEDBACK for Agent 3
+                print_colored("\n💬 Agent 3 (Story Creator) - Final Feedback (Optional):", 'CYAN')
+                final_feedback_choice = input("Provide feedback for the story? (y/n): ").strip().lower()
+                
+                if final_feedback_choice in ['y', 'yes']:
+                    user_feedback = input("Your feedback: ").strip()
+                    if user_feedback:
+                        feedback_data = {
+                            "session_id": session_id,
+                            "agent_index": 2,
+                            "feedback": user_feedback
+                        }
+                        
+                        feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                        if feedback_response.status_code == 200:
+                            feedback_result = feedback_response.json()
+                            print_colored("✅ Final feedback processed!", 'GREEN')
+                            print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                
+                print_colored("\n🎉 Feedback mechanism test completed!", 'GREEN')
+                print_colored("✅ Demonstrated: Pre-agent instructions + Post-agent feedback", 'GREEN')
+            else:
+                print_colored(f"❌ Failed to move to Agent 3: {final_response.status_code}", 'RED')
+        else:
+            print_colored(f"❌ Failed to move to Agent 2: {next_response.status_code}", 'RED')
+            
+    except Exception as e:
+        print_colored(f"❌ Feedback test failed: {e}", 'RED')
 if __name__ == "__main__":
     main()
