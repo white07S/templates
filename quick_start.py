@@ -367,5 +367,124 @@ def main():
     except Exception as e:
         print_colored(f"\n❌ Demo failed: {e}", 'RED')
 
+
+
+def test_feedback_mechanism():
+    """Test the feedback mechanism with a proper single-agent workflow"""
+    print_header("Testing Feedback Mechanism")
+    
+    # Create a single-agent workflow for feedback testing
+    request_data = {
+        "agents": [
+            {
+                "name": "Math_Calculator",
+                "persona": "You are a helpful calculator who solves math problems step by step with clear explanations.",
+                "task": "Solve mathematical problems with detailed explanations, showing all work and reasoning."
+            },
+            {
+                "name": "Concept_Explainer", 
+                "persona": "You are an educational specialist who explains mathematical concepts clearly.",
+                "task": "Explain the underlying concepts and provide additional examples."
+            },
+            {
+                "name": "Practice_Generator",
+                "persona": "You are a practice problem generator who creates similar problems for reinforcement.", 
+                "task": "Generate practice problems and solutions based on the previous work."
+            }
+        ],
+        "initial_task": "Calculate 15% of 240 and explain how to calculate percentages in general."
+    }
+    
+    try:
+        print_colored("📤 Starting new workflow for feedback test...", 'BLUE')
+        response = requests.post(f"{BASE_URL}/api/v1/agentic-ai", json=request_data, timeout=60)
+        
+        if response.status_code != 200:
+            print_colored(f"❌ Failed to start feedback test workflow: {response.status_code}", 'RED')
+            print(response.text)
+            return
+            
+        result = response.json()
+        session_id = result['session_id']
+        
+        print_colored(f"✅ Initial response from {result['current_agent_name']}:", 'GREEN')
+        print(result['response'][:300] + "..." if len(result['response']) > 300 else result['response'])
+        
+        # Wait for agent to complete
+        if not wait_for_agent_completion(session_id, 0):
+            return
+            
+        # Ask user if they want to provide feedback
+        print_colored("\n💬 Feedback Options:", 'CYAN')
+        print("1. Provide feedback to improve the response")
+        print("2. Continue to next agent without feedback")
+        
+        while True:
+            choice = input("\nEnter your choice (1-2): ").strip()
+            
+            if choice == "1":
+                # Get feedback from user
+                print_colored("\n📝 Enter your feedback for the Math Calculator:", 'YELLOW')
+                print("(Example: 'Can you also show the decimal method and explain when to use different approaches?')")
+                user_feedback = input("Your feedback: ").strip()
+                
+                if user_feedback:
+                    feedback_data = {
+                        "session_id": session_id,
+                        "agent_index": 0,
+                        "feedback": user_feedback
+                    }
+                    
+                    print_colored("\n🔄 Processing your feedback...", 'YELLOW')
+                    feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                    
+                    if feedback_response.status_code == 200:
+                        feedback_result = feedback_response.json()
+                        print_colored("✅ Feedback processed! Updated response:", 'GREEN')
+                        print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                    else:
+                        print_colored(f"❌ Feedback failed: {feedback_response.status_code}", 'RED')
+                        print(feedback_response.text)
+                else:
+                    print_colored("⚠️ No feedback provided. Continuing without feedback.", 'YELLOW')
+                break
+                
+            elif choice == "2":
+                print_colored("✅ Continuing to next agent without feedback.", 'GREEN')
+                break
+            else:
+                print_colored("❌ Invalid choice. Please enter 1 or 2.", 'RED')
+        
+        # Continue to next agent
+        print_colored("\n➡️ Moving to next agent (Concept Explainer)...", 'YELLOW')
+        next_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/next?session_id={session_id}", timeout=60)
+        
+        if next_response.status_code == 200:
+            next_result = next_response.json()
+            print_colored(f"🤖 {next_result['current_agent_name']} response:", 'PURPLE')
+            print(next_result['response'][:400] + "..." if len(next_result['response']) > 400 else next_result['response'])
+            
+            # Optional: Ask for feedback on second agent too
+            print_colored("\n💬 Want to provide feedback for the Concept Explainer? (y/n): ", 'CYAN')
+            if input().strip().lower() in ['y', 'yes']:
+                user_feedback = input("Your feedback: ").strip()
+                if user_feedback:
+                    feedback_data = {
+                        "session_id": session_id,
+                        "agent_index": 1,
+                        "feedback": user_feedback
+                    }
+                    
+                    feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                    if feedback_response.status_code == 200:
+                        feedback_result = feedback_response.json()
+                        print_colored("✅ Second feedback processed!", 'GREEN')
+                        print(feedback_result['response'][:300] + "..." if len(feedback_result['response']) > 300 else feedback_result['response'])
+        else:
+            print_colored(f"❌ Failed to move to next agent: {next_response.status_code}", 'RED')
+            
+    except Exception as e:
+        print_colored(f"❌ Feedback test failed: {e}", 'RED')
+
 if __name__ == "__main__":
     main()
