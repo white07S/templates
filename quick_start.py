@@ -368,7 +368,6 @@ def main():
         print_colored(f"\n❌ Demo failed: {e}", 'RED')
 
 
-
 def test_feedback_mechanism():
     """Test the feedback mechanism with a proper single-agent workflow"""
     print_header("Testing Feedback Mechanism")
@@ -414,12 +413,13 @@ def test_feedback_mechanism():
         if not wait_for_agent_completion(session_id, 0):
             return
             
-        # Ask user if they want to provide feedback
-        print_colored("\n💬 Feedback Options:", 'CYAN')
-        print("1. Provide feedback to improve the response")
-        print("2. Continue to next agent without feedback")
-        
-        while True:
+        # Feedback loop for Agent 1
+        agent1_satisfied = False
+        while not agent1_satisfied:
+            print_colored("\n💬 Agent 1 (Math Calculator) Options:", 'CYAN')
+            print("1. Provide feedback to improve the response")
+            print("2. Satisfied - Continue to next agent")
+            
             choice = input("\nEnter your choice (1-2): ").strip()
             
             if choice == "1":
@@ -442,16 +442,18 @@ def test_feedback_mechanism():
                         feedback_result = feedback_response.json()
                         print_colored("✅ Feedback processed! Updated response:", 'GREEN')
                         print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                        # Continue the loop to ask if they want more feedback or are satisfied
                     else:
                         print_colored(f"❌ Feedback failed: {feedback_response.status_code}", 'RED')
                         print(feedback_response.text)
+                        # Continue the loop to try again
                 else:
-                    print_colored("⚠️ No feedback provided. Continuing without feedback.", 'YELLOW')
-                break
-                
+                    print_colored("⚠️ No feedback provided.", 'YELLOW')
+                    # Continue the loop to ask again
+                    
             elif choice == "2":
-                print_colored("✅ Continuing to next agent without feedback.", 'GREEN')
-                break
+                print_colored("✅ Agent 1 completed. Moving to next agent.", 'GREEN')
+                agent1_satisfied = True
             else:
                 print_colored("❌ Invalid choice. Please enter 1 or 2.", 'RED')
         
@@ -464,22 +466,53 @@ def test_feedback_mechanism():
             print_colored(f"🤖 {next_result['current_agent_name']} response:", 'PURPLE')
             print(next_result['response'][:400] + "..." if len(next_result['response']) > 400 else next_result['response'])
             
-            # Optional: Ask for feedback on second agent too
-            print_colored("\n💬 Want to provide feedback for the Concept Explainer? (y/n): ", 'CYAN')
-            if input().strip().lower() in ['y', 'yes']:
-                user_feedback = input("Your feedback: ").strip()
-                if user_feedback:
-                    feedback_data = {
-                        "session_id": session_id,
-                        "agent_index": 1,
-                        "feedback": user_feedback
-                    }
+            # Wait for agent 2 to complete
+            if not wait_for_agent_completion(session_id, 1):
+                return
+            
+            # Feedback loop for Agent 2
+            agent2_satisfied = False
+            while not agent2_satisfied:
+                print_colored("\n💬 Agent 2 (Concept Explainer) Options:", 'CYAN')
+                print("1. Provide feedback to improve the response")
+                print("2. Satisfied - Continue to next agent")
+                
+                choice = input("\nEnter your choice (1-2): ").strip()
+                
+                if choice == "1":
+                    # Get feedback from user
+                    print_colored("\n📝 Enter your feedback for the Concept Explainer:", 'YELLOW')
+                    print("(Example: 'Can you provide more real-world examples of when percentages are used?')")
+                    user_feedback = input("Your feedback: ").strip()
                     
-                    feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
-                    if feedback_response.status_code == 200:
-                        feedback_result = feedback_response.json()
-                        print_colored("✅ Second feedback processed!", 'GREEN')
-                        print(feedback_result['response'][:300] + "..." if len(feedback_result['response']) > 300 else feedback_result['response'])
+                    if user_feedback:
+                        feedback_data = {
+                            "session_id": session_id,
+                            "agent_index": 1,
+                            "feedback": user_feedback
+                        }
+                        
+                        print_colored("\n🔄 Processing your feedback...", 'YELLOW')
+                        feedback_response = requests.post(f"{BASE_URL}/api/v1/agentic-ai/feedback", json=feedback_data, timeout=60)
+                        
+                        if feedback_response.status_code == 200:
+                            feedback_result = feedback_response.json()
+                            print_colored("✅ Feedback processed! Updated response:", 'GREEN')
+                            print(feedback_result['response'][:400] + "..." if len(feedback_result['response']) > 400 else feedback_result['response'])
+                            # Continue the loop to ask if they want more feedback or are satisfied
+                        else:
+                            print_colored(f"❌ Feedback failed: {feedback_response.status_code}", 'RED')
+                            print(feedback_response.text)
+                            # Continue the loop to try again
+                    else:
+                        print_colored("⚠️ No feedback provided.", 'YELLOW')
+                        # Continue the loop to ask again
+                        
+                elif choice == "2":
+                    print_colored("✅ Agent 2 completed. Feedback test finished!", 'GREEN')
+                    agent2_satisfied = True
+                else:
+                    print_colored("❌ Invalid choice. Please enter 1 or 2.", 'RED')
         else:
             print_colored(f"❌ Failed to move to next agent: {next_response.status_code}", 'RED')
             
