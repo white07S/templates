@@ -1,0 +1,440 @@
+# External Loss Data Analysis Configuration
+# Configuration for UBS External Loss Data Analysis Tool
+
+data_config:
+  file_path: "external_loss_mock_data.csv"
+  
+data_schema:
+  columns:
+    reference_id_code:
+      type: "string"
+      description: "Unique identifier for each loss event"
+      example: "fe4123ef-2509-4e47-88e9-57ec33933004"
+      
+    parent_name:
+      type: "string"
+      description: "Parent company or entity name"
+      example: "Nguyen, Mccarty and Mann"
+      
+    ama_peer_bank:
+      type: "string"
+      description: "AMA peer bank reference"
+      example: "James, Williams and Downs"
+      
+    description_of_event:
+      type: "string"
+      description: "Detailed description of the loss event"
+      example: "Fraud incident occurred in Risk Assessment process."
+      
+    nfr_taxonomy:
+      type: "string"
+      description: "NFR (Non-Financial Risk) taxonomy classification"
+      example: "Cybersecurity"
+      
+    loss_amount___m_:
+      type: "float"
+      description: "Loss amount in millions (USD)"
+      example: 48.14
+      
+    basel_business_line__level1_:
+      type: "string"
+      description: "Basel business line classification level 1"
+      example: "Asset Management"
+      
+    basel_business_line__level_2:
+      type: "string"
+      description: "Basel business line classification level 2"
+      example: "Wealth Management"
+      
+    business_unit:
+      type: "string"
+      description: "Business unit description"
+      example: "cultivate world-class communities"
+      
+    ubs_business_division:
+      type: "string"
+      description: "UBS business division"
+      example: "UBS Europe SE"
+      
+    event_risk_category:
+      type: "string"
+      description: "Primary risk category of the event"
+      example: "Compliance Breach"
+      
+    sub_risk_category:
+      type: "string"
+      description: "Sub-category of risk"
+      example: "Execution Errors"
+      
+    activity:
+      type: "string"
+      description: "Specific activity where loss occurred"
+      example: "Client Onboarding"
+      
+    country_of_incident:
+      type: "string"
+      description: "Country where incident occurred"
+      example: "India"
+      
+    event_region:
+      type: "string"
+      description: "Regional classification"
+      example: "EMEA"
+      
+    month__year_of_settlement:
+      type: "string"
+      description: "Settlement date in MM/YYYY format"
+      example: "11/2023"
+      
+    multiple_firms_impacted_code:
+      type: "string"
+      description: "Whether multiple firms were impacted (Y/N)"
+      example: "N"
+      
+    single_event_multiple_loss_code:
+      type: "string"
+      description: "Whether single event caused multiple losses (Y/N)"
+      example: "Y"
+      
+    date_of_entry:
+      type: "string"
+      description: "Date when entry was made (YYYY-MM-DD)"
+      example: "2023-12-02"
+      
+    nfr_taxonomy_number:
+      type: "string"
+      description: "NFR taxonomy reference number"
+      example: "NFR-1764"
+      
+    root_cause:
+      type: "string"
+      description: "Root cause of the incident"
+      example: "Insider threat"
+      
+    learning_outcome:
+      type: "string"
+      description: "Key learning from the incident"
+      example: "The incident highlighted gaps in Transaction Settlement."
+      
+    impact:
+      type: "string"
+      description: "Impact description"
+      example: "Moderate impact on operations and reputational risk."
+      
+    summary:
+      type: "string"
+      description: "Brief summary of the event"
+      example: "Fraud event causing $74M loss."
+      
+    ai_nfr_cluster:
+      type: "string"
+      description: "AI-generated NFR cluster"
+      example: "AI Ops"
+      
+    ai_nfr_taxonomy:
+      type: "string"
+      description: "AI-generated NFR taxonomy"
+      example: "Fraud"
+      
+    ai_risk_theme:
+      type: "string"
+      description: "AI-identified risk theme"
+      example: "Outsourcing Risk"
+      
+    ai_reasoning_taxonomy_steps:
+      type: "string"
+      description: "AI reasoning steps for taxonomy"
+      example: "Data Collection, Preprocessing, Model Selection"
+      
+    ai_reasoning_risk_theme:
+      type: "string"
+      description: "AI reasoning for risk theme identification"
+      example: "Risk due to Human Error in Client Onboarding."
+
+# UBS Brand Colors
+ubs_colors:
+  ubs-black: "#000000"
+  ubs-red: "#e60000"
+  ubs-white: "#ffffff"
+  ubs-red-web: "#da0000"
+  ubs-bordeaux1: "#bd000c"
+  ubs-bordeaux50: "#b03974"
+  ubs-sand: "#cfbd9b"
+  ubs-caramel: "#cfbd9b"
+  ubs-ginger: "#e05bd0"
+  ubs-chocolate: "#4d3c2f"
+  ubs-clay: "#7b6b59"
+  ubs-mouse: "#beb29e"
+  ubs-curry: "#e5b01c"
+  ubs-amber-web: "#f2c551"
+  ubs-warm5: "#5b5e5d"
+  ubs-honey: "#edc860"
+  ubs-straw: "#f2d88e"
+  ubs-chestnut-web: "#ba0000"
+  ubs-chestnut: "#a43725"
+  ubs-terracotta: "#c07156"
+  ubs-cinnamon: "#e6b64d"
+
+# OpenAI Configuration
+openai_config:
+  base_url: "https://api.agno.com/v1"
+  model: "gpt-4o-mini"
+  temperature: 0.1
+  max_tokens: 4000
+  
+# Agent Definitions
+agents:
+  data_analyst:
+    name: "Loss Data Analyst"
+    description: "Specialized agent for analyzing external loss data"
+    model: "gpt-4o"
+    system_prompt: |
+      You are a specialized external loss data analyst for UBS. You have deep expertise in:
+      - Operational risk analysis
+      - Loss event categorization and trending
+      - Basel business line analysis
+      - NFR (Non-Financial Risk) taxonomy
+      - Root cause analysis
+      - Risk impact assessment
+      
+      When analyzing data, consider:
+      - Loss patterns by business line, region, and risk category
+      - Trending over time periods
+      - Root cause frequency analysis
+      - Impact severity distributions
+      - Regulatory and compliance implications
+      
+      Always provide actionable insights and highlight significant patterns or outliers.
+      Use precise financial terminology and provide context for risk management decisions.
+    
+    tools:
+      - data_loader
+      - statistical_analyzer
+      - trend_analyzer
+      - risk_calculator
+      
+  data_visualizer:
+    name: "Loss Data Visualizer"
+    description: "Specialized agent for creating visualizations of loss data"
+    model: "gpt-4o"
+    system_prompt: |
+      You are a data visualization specialist for UBS external loss data. You create clear, 
+      professional visualizations using UBS brand colors. 
+      
+      Available UBS colors (use these for consistent branding):
+      - Primary: UBS Red (#e60000), UBS Black (#000000)
+      - Secondary: UBS Red Web (#da0000), UBS Bordeaux (#bd000c)
+      - Accent: UBS Curry (#e5b01c), UBS Honey (#edc860), UBS Terracotta (#c07156)
+      - Neutral: UBS Sand (#cfbd9b), UBS Clay (#7b6b59), UBS Mouse (#beb29e)
+      
+      When creating visualizations:
+      - Use UBS Red as the primary color for main data series
+      - Apply UBS brand guidelines for professional appearance
+      - Include proper titles, labels, and legends
+      - Highlight key insights visually
+      - Use appropriate chart types for different data relationships
+      - Ensure accessibility with proper contrast
+      
+      Chart type recommendations:
+      - Time series: Line charts with UBS Red
+      - Categorical: Bar charts with UBS color palette
+      - Distributions: Histograms with UBS Red
+      - Correlations: Scatter plots with UBS accent colors
+      - Geographical: Maps with UBS color gradients
+    
+    tools:
+      - chart_generator
+      - map_generator
+      - dashboard_creator
+      
+# Tool Definitions
+tools:
+  data_loader:
+    name: "Data Loader"
+    description: "Load and preprocess external loss data"
+    python_function: |
+      import pandas as pd
+      import numpy as np
+      from datetime import datetime
+      
+      def load_loss_data(file_path="external_loss_data.csv"):
+          """Load and preprocess external loss data"""
+          df = pd.read_csv(file_path)
+          
+          # Convert date columns
+          df['date_of_entry'] = pd.to_datetime(df['date_of_entry'])
+          df['month_year_settlement'] = pd.to_datetime(df['month__year_of_settlement'], format='%m/%Y')
+          
+          # Clean numeric columns
+          df['loss_amount_m'] = pd.to_numeric(df['loss_amount___m_'], errors='coerce')
+          
+          # Clean categorical columns
+          categorical_cols = ['multiple_firms_impacted_code', 'single_event_multiple_loss_code']
+          for col in categorical_cols:
+              df[col] = df[col].str.upper()
+          
+          return df
+          
+  statistical_analyzer:
+    name: "Statistical Analyzer"
+    description: "Perform statistical analysis on loss data"
+    python_function: |
+      import pandas as pd
+      import numpy as np
+      from scipy import stats
+      
+      def analyze_loss_statistics(df, group_by=None):
+          """Perform statistical analysis on loss amounts"""
+          if group_by:
+              grouped = df.groupby(group_by)['loss_amount_m'].agg([
+                  'count', 'sum', 'mean', 'median', 'std', 'min', 'max'
+              ]).round(2)
+              return grouped
+          else:
+              stats_dict = {
+                  'count': df['loss_amount_m'].count(),
+                  'total_loss': df['loss_amount_m'].sum(),
+                  'mean_loss': df['loss_amount_m'].mean(),
+                  'median_loss': df['loss_amount_m'].median(),
+                  'std_loss': df['loss_amount_m'].std(),
+                  'min_loss': df['loss_amount_m'].min(),
+                  'max_loss': df['loss_amount_m'].max(),
+                  'q75': df['loss_amount_m'].quantile(0.75),
+                  'q90': df['loss_amount_m'].quantile(0.90),
+                  'q95': df['loss_amount_m'].quantile(0.95)
+              }
+              return {k: round(v, 2) for k, v in stats_dict.items()}
+              
+  trend_analyzer:
+    name: "Trend Analyzer"
+    description: "Analyze trends in loss data over time"
+    python_function: |
+      import pandas as pd
+      import numpy as np
+      
+      def analyze_trends(df, time_col='month_year_settlement', value_col='loss_amount_m'):
+          """Analyze trends over time"""
+          trend_df = df.groupby(pd.Grouper(key=time_col, freq='M')).agg({
+              value_col: ['count', 'sum', 'mean'],
+              'event_risk_category': lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else None
+          }).round(2)
+          
+          trend_df.columns = ['incident_count', 'total_loss', 'avg_loss', 'top_risk_category']
+          return trend_df.reset_index()
+          
+  risk_calculator:
+    name: "Risk Calculator"
+    description: "Calculate risk metrics and VaR"
+    python_function: |
+      import pandas as pd
+      import numpy as np
+      
+      def calculate_risk_metrics(df):
+          """Calculate risk metrics including VaR"""
+          losses = df['loss_amount_m'].dropna()
+          
+          # Value at Risk calculations
+          var_95 = np.percentile(losses, 95)
+          var_99 = np.percentile(losses, 99)
+          
+          # Expected Shortfall
+          es_95 = losses[losses >= var_95].mean()
+          es_99 = losses[losses >= var_99].mean()
+          
+          return {
+              'VaR_95': round(var_95, 2),
+              'VaR_99': round(var_99, 2),
+              'ES_95': round(es_95, 2),
+              'ES_99': round(es_99, 2),
+              'max_loss': round(losses.max(), 2),
+              'volatility': round(losses.std(), 2)
+          }
+          
+  chart_generator:
+    name: "Chart Generator"
+    description: "Generate charts with UBS branding"
+    python_function: |
+      import matplotlib.pyplot as plt
+      import seaborn as sns
+      import pandas as pd
+      
+      # UBS Colors
+      UBS_COLORS = {
+          'red': '#e60000',
+          'black': '#000000',
+          'red_web': '#da0000',
+          'bordeaux': '#bd000c',
+          'curry': '#e5b01c',
+          'honey': '#edc860',
+          'sand': '#cfbd9b',
+          'clay': '#7b6b59'
+      }
+      
+      def create_ubs_chart(data, chart_type='bar', title='', color='red'):
+          """Create UBS-branded charts"""
+          plt.style.use('seaborn-v0_8-whitegrid')
+          fig, ax = plt.subplots(figsize=(12, 8))
+          
+          # Set UBS color
+          ubs_color = UBS_COLORS.get(color, UBS_COLORS['red'])
+          
+          if chart_type == 'bar':
+              data.plot(kind='bar', ax=ax, color=ubs_color)
+          elif chart_type == 'line':
+              data.plot(kind='line', ax=ax, color=ubs_color, linewidth=2)
+          elif chart_type == 'pie':
+              data.plot(kind='pie', ax=ax, colors=[ubs_color, UBS_COLORS['curry'], UBS_COLORS['sand']])
+              
+          ax.set_title(title, fontsize=16, fontweight='bold', color=UBS_COLORS['black'])
+          ax.grid(True, alpha=0.3)
+          plt.tight_layout()
+          return fig
+
+# Command Line Interface Configuration
+cli_config:
+  name: "UBS Loss Data Analyzer"
+  description: "Natural language interface for UBS external loss data analysis"
+  commands:
+    analyze:
+      description: "Perform data analysis"
+      examples:
+        - "analyze total losses by business line"
+        - "show me the trend of cybersecurity incidents"
+        - "what are the top risk categories by loss amount"
+        
+    visualize:
+      description: "Create visualizations"
+      examples:
+        - "plot losses over time in UBS red"
+        - "create a bar chart of losses by region using UBS colors"
+        - "show distribution of loss amounts as histogram"
+        
+    report:
+      description: "Generate comprehensive reports"
+      examples:
+        - "generate quarterly risk report"
+        - "create executive summary of operational losses"
+        
+# Natural Language Processing
+nlp_config:
+  intent_recognition:
+    analysis_keywords: ["analyze", "calculate", "show", "find", "identify", "trend", "pattern"]
+    visualization_keywords: ["plot", "chart", "graph", "visualize", "draw", "map"]
+    aggregation_keywords: ["total", "sum", "average", "count", "group by", "by"]
+    time_keywords: ["over time", "trend", "monthly", "quarterly", "yearly"]
+    
+  color_mapping:
+    "ubs red": "red"
+    "red": "red"
+    "ubs black": "black"
+    "black": "black"
+    "ubs curry": "curry"
+    "yellow": "curry"
+    "ubs honey": "honey"
+    "gold": "honey"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "loss_data_analyzer.log"
