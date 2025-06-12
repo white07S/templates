@@ -650,3 +650,66 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
+
+
+python main.py --mode visualize --query "create a multi-line chart showing monthly loss trends by top 5 risk categories over the last 2 years using different UBS colors for each line"
+
+python main.py --mode visualize --query "plot a dual-axis chart with loss frequency as bars and cumulative loss amount as a line over time, use UBS red for bars and UBS bordeaux for the line"
+
+python main.py --mode visualize --query "show me a stacked area chart of quarterly losses by business division using UBS color palette"
+Geographic & Regional Analysis
+bashpython main.py --mode visualize --query "create a world map heatmap showing total losses by country using UBS red gradient"
+
+python main.py --mode visualize --query "plot a bubble chart with regions on x-axis, average loss amount on y-axis, and bubble size representing incident count, use UBS curry color"
+
+python main.py --mode visualize --query "make a treemap showing loss distribution by region and country using UBS color scheme"
+Business Line & Risk Analysis
+bashpython main.py --mode visualize --query "create a sunburst chart showing hierarchy of Basel business lines and their sub-categories with loss amounts, use UBS brand colors"
+
+python main.py --mode visualize --query "plot a radar chart comparing risk categories across different UBS business divisions using UBS red and bordeaux colors"
+
+python main.py --mode visualize --query "make a parallel coordinates plot showing relationships between business line, risk category, region, and loss amount using UBS color coding"
+Statistical Distribution Analysis
+bashpython main.py --mode visualize --query "create a violin plot showing loss amount distributions by risk category with UBS red filling and box plots overlaid"
+
+python main.py --mode visualize --query "plot a log-scale histogram of loss amounts with fitted distribution curves, use UBS honey color for bars and UBS black for curve"
+
+python main.py --mode visualize --query "make a quantile-quantile plot comparing actual loss distribution vs normal distribution, highlight outliers in UBS curry"
+Correlation & Relationship Analysis
+bashpython main.py --mode visualize --query "create a correlation heatmap matrix of loss amounts, incident counts, and settlement times by business unit using UBS color gradient"
+
+python main.py --mode visualize --query "plot a scatter plot matrix showing relationships between loss amount, settlement time, and multiple firms impacted, color code by risk category using UBS palette"
+
+python main.py --mode visualize --query "make a network diagram showing connections between root causes and risk categories, with node sizes representing total losses, use UBS colors"
+Advanced Multi-dimensional Analysis
+bashpython main.py --mode visualize --query "create a 3D scatter plot with loss amount, incident count, and average settlement time, color code by region using UBS brand colors"
+
+python main.py --mode visualize --query "plot a complex dashboard with 4 subplots: time series, geographic distribution, risk category breakdown, and business line analysis, all using consistent UBS styling"
+
+python main.py --mode visualize --query "make a Sankey diagram showing flow from root causes through risk categories to business impacts, use UBS color transitions"
+Comparative Analysis
+bashpython main.py --mode visualize --query "create side-by-side box plots comparing loss distributions between single vs multiple firm incidents, use UBS red and bordeaux"
+
+python main.py --mode visualize --query "plot a before/after comparison chart showing loss trends pre and post a specific date, highlight the transition point in UBS curry"
+
+python main.py --mode visualize --query "make a small multiples grid showing loss trends for each major risk category, consistent UBS red color across all panels"
+Risk-Specific Analysis
+bashpython main.py --mode visualize --query "create a risk appetite chart with VaR confidence intervals and actual losses plotted as scatter points, use UBS color coding for risk levels"
+
+python main.py --mode visualize --query "plot a Monte Carlo simulation visualization showing potential loss scenarios with confidence bands in UBS colors"
+
+python main.py --mode visualize --query "make a control effectiveness chart showing root cause frequency vs average loss impact, highlight high-risk quadrants in UBS red"
+Advanced Statistical Plots
+bashpython main.py --mode visualize --query "create a time series decomposition plot showing trend, seasonal, and residual components of monthly losses using UBS color scheme"
+
+python main.py --mode visualize --query "plot a survival analysis chart showing time-to-settlement distribution with Kaplan-Meier curves by risk category, use different UBS colors"
+
+python main.py --mode visualize --query "make a principal component analysis biplot showing loss events in reduced dimensional space, color code by business division using UBS palette"
+Analytical Queries for Testing
+bashpython main.py --mode analyze --query "calculate VaR at 95% and 99% confidence levels by business line and identify which lines exceed risk appetite thresholds"
+
+python main.py --mode analyze --query "perform outlier detection on loss amounts and identify the top 10 extreme events with their characteristics"
+
+python main.py --mode analyze --query "calculate correlation between settlement time and loss amount, and identify factors that influence settlement duration"
+
+python main.py --mode report --query "generate a comprehensive quarterly risk report including executive summary, trend analysis, geographic breakdown, and recommendations"
