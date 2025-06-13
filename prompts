@@ -1,0 +1,24 @@
+Problem statement root_cause cluster analysis:
+
+
+So I have data like this: its a df:
+
+Date Loss_id, Loss_description, loss_root_causes, loss_root_causes_embeddings
+
+Date is datetime
+Loss id is a string,
+Loss description is string
+loss_root_causes is list of string, where string are sentences
+root_causes_embeddings is list of numpy high dimensional vectors that represent meaning of root causes of that row in vectors.
+
+
+Now the goal is 
+Given user provides starting date and ending date:
+We are able to do concentration analysis which allows showing things in this way:
+Sentence 1: rank score: linked with losses id: loss id are linked with loss description
+Sentence 2: rank score: linked with losses id: loss id are linked with loss description
+So on. 
+
+Return a nested json.
+
+Give me best solution for this problem which is most accurate, it can be bit slow but I want most accurate solution
