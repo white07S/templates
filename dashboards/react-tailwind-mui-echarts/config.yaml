@@ -1,0 +1,32 @@
+data_schema:
+  columns:
+    loss_amount___m_: "Loss amount in millions USD"
+    date_of_entry: "Date when loss was entered"
+    month__year_of_settlement: "Settlement date (MM/YYYY format)"
+    business_line: "Business line where loss occurred"
+    risk_category: "Operational risk category"  
+    geography: "Geographic region"
+    root_cause: "Primary cause of the loss"
+    event_description: "Detailed description of the loss event"
+    recovery_amount: "Amount recovered from the loss"
+    legal_liability: "Legal liability status"
+
+ubs_colors:
+  ubs-red: "#e60000"
+  ubs-blue: "#0073e6"
+  ubs-gray: "#767676"
+  ubs-light-gray: "#f5f5f5"
+  ubs-dark-gray: "#333333"
+  ubs-green: "#00a651"
+  ubs-orange: "#ff8200"
+
+database:
+  memory_db_path: "tmp/"
+  plots_path: "static/plots/"
+  data_path: "static/data/"
+
+agents:
+  model: "gpt-4o-mini"
+  enable_memory: true
+  history_runs: 5
+  show_tool_calls: true
