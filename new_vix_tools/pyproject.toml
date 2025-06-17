@@ -1,0 +1,15 @@
+[project]
+name = "new-vix-tools"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "agno>=1.6.2",
+    "fastapi>=0.115.12",
+    "matplotlib>=3.10.3",
+    "openai>=1.88.0",
+    "pandas>=2.3.0",
+    "sqlalchemy>=2.0.41",
+    "uvicorn>=0.34.3",
+]

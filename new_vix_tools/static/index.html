@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Analysis Chatbot</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .chat-container {
+            height: calc(100vh - 200px);
+            min-height: 400px;
+        }
+        .message {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .typing-indicator {
+            display: inline-flex;
+            align-items: center;
+        }
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            background-color: #6366f1;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        .chart-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin: 10px 0;
+        }
+        .upload-area {
+            border: 2px dashed #6366f1;
+            transition: all 0.3s ease;
+        }
+        .upload-area.dragover {
+            background-color: #eef2ff;
+            border-color: #4f46e5;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4 max-w-6xl">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-4">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">
+                <i class="fas fa-chart-line text-indigo-600 mr-2"></i>
+                Data Analysis Chatbot
+            </h1>
+            <p class="text-gray-600">Upload your CSV file and start exploring your data with AI-powered insights</p>
+        </div>
+
+        <!-- File Upload Section -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-4">
+            <div id="uploadArea" class="upload-area border-2 rounded-lg p-8 text-center cursor-pointer hover:bg-gray-50">
+                <i class="fas fa-cloud-upload-alt text-4xl text-indigo-600 mb-4"></i>
+                <p class="text-gray-700 font-medium mb-2">Drop your CSV file here or click to browse</p>
+                <p class="text-gray-500 text-sm">Maximum file size: 50MB</p>
+                <input type="file" id="fileInput" accept=".csv" class="hidden">
+            </div>
+            <div id="fileInfo" class="mt-4 hidden">
+                <div class="flex items-center justify-between bg-green-50 p-4 rounded-lg">
+                    <div class="flex items-center">
+                        <i class="fas fa-file-csv text-green-600 text-2xl mr-3"></i>
+                        <div>
+                            <p class="font-medium text-gray-800" id="fileName"></p>
+                            <p class="text-sm text-gray-600" id="fileDetails"></p>
+                        </div>
+                    </div>
+                    <button id="removeFile" class="text-red-600 hover:text-red-700">
+                        <i class="fas fa-times-circle text-xl"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Interface -->
+        <div class="bg-white rounded-lg shadow-md p-4">
+            <div id="chatContainer" class="chat-container overflow-y-auto p-4 space-y-4 mb-4">
+                <div class="message text-center text-gray-500">
+                    <p>Welcome! Upload a CSV file to begin analyzing your data.</p>
+                </div>
+            </div>
+            
+            <!-- Input Area -->
+            <div class="border-t pt-4">
+                <div class="flex space-x-2">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Ask about your data..." 
+                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500"
+                        disabled
+                    >
+                    <button 
+                        id="sendButton" 
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled
+                    >
+                        <i class="fas fa-paper-plane mr-2"></i>Send
+                    </button>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-2">
+                    <button class="suggestion-btn text-sm px-3 py-1 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200" data-message="Show me a summary of the data">
+                        📊 Data Summary
+                    </button>
+                    <button class="suggestion-btn text-sm px-3 py-1 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200" data-message="Create a bar chart of the top 10 values">
+                        📈 Bar Chart
+                    </button>
+                    <button class="suggestion-btn text-sm px-3 py-1 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200" data-message="Show me the correlation between columns">
+                        🔗 Correlations
+                    </button>
+                    <button class="suggestion-btn text-sm px-3 py-1 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200" data-message="Create a distribution plot">
+                        📉 Distribution
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let sessionId = null;
+        let isProcessing = false;
+
+        // DOM elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileDetails = document.getElementById('fileDetails');
+        const removeFile = document.getElementById('removeFile');
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+
+        // File upload handling
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFileUpload(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileUpload(e.target.files[0]);
+            }
+        });
+
+        removeFile.addEventListener('click', () => {
+            fileInfo.classList.add('hidden');
+            uploadArea.classList.remove('hidden');
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            sessionId = null;
+            addMessage('system', 'File removed. Please upload a new CSV file to continue.');
+        });
+
+        // Message handling
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !isProcessing) {
+                sendMessage();
+            }
+        });
+
+        sendButton.addEventListener('click', sendMessage);
+
+        // Suggestion buttons
+        document.querySelectorAll('.suggestion-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!messageInput.disabled && !isProcessing) {
+                    messageInput.value = btn.dataset.message;
+                    sendMessage();
+                }
+            });
+        });
+
+        // Functions
+        async function handleFileUpload(file) {
+            if (!file.name.endsWith('.csv')) {
+                alert('Please upload a CSV file');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            if (sessionId) {
+                formData.append('session_id', sessionId);
+            }
+
+            try {
+                showLoadingMessage('Uploading and analyzing your file...');
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+
+                const data = await response.json();
+                sessionId = data.session_id;
+                
+                // Update UI
+                fileName.textContent = data.filename;
+                fileDetails.textContent = `${data.schema.shape[0]} rows × ${data.schema.shape[1]} columns`;
+                fileInfo.classList.remove('hidden');
+                uploadArea.classList.add('hidden');
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+
+                // Show initial analysis
+                removeLoadingMessage();
+                addMessage('assistant', data.initial_analysis);
+                
+                // Add a helpful message
+                addMessage('system', 'File uploaded successfully! You can now ask questions about your data or request visualizations.');
+            } catch (error) {
+                removeLoadingMessage();
+                addMessage('error', 'Failed to upload file. Please try again.');
+                console.error(error);
+            }
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || isProcessing) return;
+
+            isProcessing = true;
+            messageInput.value = '';
+            sendButton.disabled = true;
+
+            // Add user message
+            addMessage('user', message);
+
+            try {
+                showLoadingMessage('Analyzing your request...');
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        session_id: sessionId
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Request failed');
+                }
+
+                const data = await response.json();
+                removeLoadingMessage();
+                
+                // Add response
+                addMessage('assistant', data.response, data.visualizations);
+                
+            } catch (error) {
+                removeLoadingMessage();
+                addMessage('error', 'Failed to process your request. Please try again.');
+                console.error(error);
+            } finally {
+                isProcessing = false;
+                sendButton.disabled = false;
+            }
+        }
+
+        function addMessage(type, content, visualizations = []) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message flex ' + (type === 'user' ? 'justify-end' : 'justify-start');
+            
+            const bubbleClass = type === 'user' 
+                ? 'bg-indigo-600 text-white' 
+                : type === 'error'
+                ? 'bg-red-100 text-red-800'
+                : type === 'system'
+                ? 'bg-gray-100 text-gray-700'
+                : 'bg-gray-100 text-gray-800';
+            
+            const iconClass = type === 'user' 
+                ? 'fa-user' 
+                : type === 'error'
+                ? 'fa-exclamation-circle'
+                : type === 'system'
+                ? 'fa-info-circle'
+                : 'fa-robot';
+
+            let visualizationsHtml = '';
+            if (visualizations && visualizations.length > 0) {
+                visualizationsHtml = visualizations.map(url => 
+                    `<img src="${url}" alt="Chart" class="chart-image">`
+                ).join('');
+            }
+
+            messageDiv.innerHTML = `
+                <div class="max-w-3xl ${type === 'user' ? 'ml-auto' : ''}">
+                    <div class="flex items-start space-x-2">
+                        ${type !== 'user' ? `<div class="flex-shrink-0 w-8 h-8 rounded-full ${bubbleClass} flex items-center justify-center">
+                            <i class="fas ${iconClass} text-sm"></i>
+                        </div>` : ''}
+                        <div class="${bubbleClass} rounded-lg px-4 py-2 max-w-full">
+                            <p class="whitespace-pre-wrap">${escapeHtml(content)}</p>
+                            ${visualizationsHtml}
+                        </div>
+                        ${type === 'user' ? `<div class="flex-shrink-0 w-8 h-8 rounded-full ${bubbleClass} flex items-center justify-center">
+                            <i class="fas ${iconClass} text-sm"></i>
+                        </div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function showLoadingMessage(text = 'Thinking...') {
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'loadingMessage';
+            loadingDiv.className = 'message flex justify-start';
+            loadingDiv.innerHTML = `
+                <div class="flex items-start space-x-2">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+                        <i class="fas fa-robot text-sm text-gray-600"></i>
+                    </div>
+                    <div class="bg-gray-100 text-gray-800 rounded-lg px-4 py-2">
+                        <p>${text}</p>
+                        <div class="typing-indicator mt-2">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            chatContainer.appendChild(loadingDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function removeLoadingMessage() {
+            const loadingMessage = document.getElementById('loadingMessage');
+            if (loadingMessage) {
+                loadingMessage.remove();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
