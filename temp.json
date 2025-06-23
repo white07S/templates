@@ -1,0 +1,222 @@
+{
+  "question": "Non-Financial Risk issue/event: Is it related to people (employment practices/legal obligations, payroll, staffing, screening, registration requirements) or does it affect employee relations?",
+  "yes": {
+    "leaf": true,
+    "question": "Is it related to people (employment practices/legal obligations…)?",
+    "risk_type": "Compliance Risk",
+    "risk_id": 1,
+    "risk_name": "Employment or Licensing Practices"
+  },
+  "no": {
+    "question": "Does it affect external regulatory or financial reporting?",
+    "yes": {
+      "leaf": true,
+      "question": "Does it affect external regulatory or financial reporting?",
+      "risk_type": "Operational Risk",
+      "risk_id": 11,
+      "risk_name": "Financial and Regulatory Reporting"
+    },
+    "no": {
+      "question": "Is it related to data?",
+      "yes": {
+        "question": "Is it related to collection, storage, creation and/or subsequent processing of data?",
+        "yes": {
+          "leaf": true,
+          "question": "Is it related to collection, storage, creation and/or subsequent processing of data?",
+          "risk_type": "Compliance Risk",
+          "risk_id": 19,
+          "risk_name": "Privacy, Data Ethics and Records Management"
+        },
+        "no": {
+          "question": "Does it relate to completeness, correctness, timeliness of data, or governance/responsibilities for data management?",
+          "yes": {
+            "leaf": true,
+            "question": "Does it relate to completeness, correctness, timeliness of data, or governance/responsibilities for data management?",
+            "risk_type": "Operational Risk",
+            "risk_id": 14,
+            "risk_name": "Data Management"
+          },
+          "no": {
+            "leaf": true,
+            "note": "End of data branch—no matching category"
+          }
+        }
+      },
+      "no": {
+        "question": "Is it linked to a client or a product/service?",
+        "yes": {
+          "question": "Does it compromise market integrity?",
+          "yes": {
+            "leaf": true,
+            "question": "Does it compromise market integrity?",
+            "risk_type": "Compliance Risk",
+            "risk_id": 2,
+            "risk_name": "Market Conduct"
+          },
+          "no": {
+            "question": "Is it related to order capture or execution (trade confirmations, valuations, payments/settlements, custody, reconciliations, lending, fee processing or asset servicing)?",
+            "yes": {
+              "leaf": true,
+              "question": "Is it related to order capture or execution (…)?",
+              "risk_type": "Operational Risk",
+              "risk_id": 16,
+              "risk_name": "Transaction Processing and Execution"
+            },
+            "no": {
+              "question": "Is it related to technology availability, degradation, outages, or cyber/information‐security deficiencies?",
+              "yes": {
+                "question": "Does it involve cyber threats?",
+                "yes": {
+                  "leaf": true,
+                  "question": "Does it involve cyber threats?",
+                  "risk_type": "Operational Risk",
+                  "risk_id": 20,
+                  "risk_name": "Cyber and Information Security"
+                },
+                "no": {
+                  "leaf": true,
+                  "question": "Is it related to application or infrastructure availability?",
+                  "risk_type": "Operational Risk",
+                  "risk_id": 15,
+                  "risk_name": "Technology Production Stability"
+                }
+              },
+              "no": {
+                "question": "Is it a failure of third‐party management or inter‐entity outsourcing frameworks (or have they been bypassed)?",
+                "yes": {
+                  "leaf": true,
+                  "question": "Is it a failure of third‐party management or inter‐entity outsourcing frameworks (…)?",
+                  "risk_type": "Operational Risk",
+                  "risk_id": 17,
+                  "risk_name": "Third Party Management and Inter-entity Outsourcing"
+                },
+                "no": {
+                  "question": "Is it a business‐continuity management failure (failure to provide critical activities under operational disruption)?",
+                  "yes": {
+                    "leaf": true,
+                    "question": "Is it a business‐continuity management failure (…)?",
+                    "risk_type": "Operational Risk",
+                    "risk_id": 18,
+                    "risk_name": "Business Continuity, Resilience and Crisis Management"
+                  },
+                  "no": {
+                    "question": "Is it a model development, implementation, use, validation or governance failure, including AI and machine learning?",
+                    "yes": {
+                      "leaf": true,
+                      "question": "Is it a model development, implementation, use, validation or governance failure, including AI and machine learning?",
+                      "risk_type": "Operational Risk",
+                      "risk_id": 12,
+                      "risk_name": "Model Risk"
+                    },
+                    "no": {
+                      "question": "Is it a failure related to corporate and legal entity governance and/or a NFR, COSO, change, whistleblowing, litigation, employee conduct, employee supervision, governance documents, credit, market, treasury or SCR frameworks?",
+                      "yes": {
+                        "leaf": true,
+                        "question": "Is it a failure related to corporate and legal entity governance and/or a NFR, COSO…?",
+                        "risk_type": "Operational Risk",
+                        "risk_id": 10,
+                        "risk_name": "Corporate Governance and Frameworks"
+                      },
+                      "no": {
+                        "leaf": true,
+                        "note": "End of Ops‐risk governance branch—no matching category"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "no": {
+          "question": "Is it related to a product/service?",
+          "yes": {
+            "question": "Is it related to product/service design?",
+            "yes": {
+              "leaf": true,
+              "question": "Is it related to product/service design?",
+              "risk_type": "Compliance Risk",
+              "risk_id": 3,
+              "risk_name": "Product and Service Lifecycle"
+            },
+            "no": {
+              "question": "Is it related to product/service suitability?",
+              "yes": {
+                "leaf": true,
+                "question": "Is it related to product/service suitability?",
+                "risk_type": "Compliance Risk",
+                "risk_id": 4,
+                "risk_name": "Investment Suitability"
+              },
+              "no": {
+                "question": "Is it related to cross-product/service cross-border delivery?",
+                "yes": {
+                  "leaf": true,
+                  "question": "Is it related to cross-product/service cross-border delivery?",
+                  "risk_type": "Compliance Risk",
+                  "risk_id": 5,
+                  "risk_name": "Cross-border Business Conduct"
+                },
+                "no": {
+                  "leaf": true,
+                  "note": "End of product‐service branch—no matching category"
+                }
+              }
+            }
+          },
+          "no": {
+            "question": "Is it related to a client?",
+            "yes": {
+              "question": "Is there intent to defraud?",
+              "yes": {
+                "leaf": true,
+                "question": "Is there intent to defraud?",
+                "risk_type": "Financial Crime Risk",
+                "risk_id": 6,
+                "risk_name": "Internal and External Fraud"
+              },
+              "no": {
+                "question": "Is it related to client due diligence?",
+                "yes": {
+                  "leaf": true,
+                  "question": "Is it related to client due diligence?",
+                  "risk_type": "Financial Crime Risk",
+                  "risk_id": 7,
+                  "risk_name": "AML and KYC"
+                },
+                "no": {
+                  "question": "Is it related to sanctions laws and regulations?",
+                  "yes": {
+                    "leaf": true,
+                    "question": "Is it related to sanctions laws and regulations?",
+                    "risk_type": "Financial Crime Risk",
+                    "risk_id": 8,
+                    "risk_name": "Sanctions or Embargo Violations"
+                  },
+                  "no": {
+                    "question": "Is it related to bribery and corruption regulations?",
+                    "yes": {
+                      "leaf": true,
+                      "question": "Is it related to bribery and corruption regulations?",
+                      "risk_type": "Financial Crime Risk",
+                      "risk_id": 9,
+                      "risk_name": "Bribery and Corruption"
+                    },
+                    "no": {
+                      "leaf": true,
+                      "note": "End of financial-crime branch—no matching category"
+                    }
+                  }
+                }
+              }
+            },
+            "no": {
+              "leaf": true,
+              "note": "No further branches—review other taxonomies if needed"
+            }
+          }
+        }
+      }
+    }
+  }
+}
