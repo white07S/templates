@@ -1,0 +1,102 @@
+Yes, this is a common challenge in aligning LLM outputs with realistic constraints, especially in sensitive domains like banking. You’re essentially trying to filter or constrain scenario generation based on institutional norms, legal constraints, and reputational boundaries.
+
+Here’s a step-by-step guide with sources and strategies to build this “red line” list of forbidden or implausible scenarios before you talk to SMEs:
+
+⸻
+
+✅ 1. Define “Never Events” for Banks Like UBS
+
+Here are categories of events that global banks like UBS will categorically not engage in, either because they’re criminal, reputationally suicidal, or fundamentally incompatible with operational reality:
+
+Forbidden Category	Examples	Why it’s forbidden
+Criminal intent	Intentionally defrauding clients, manipulating markets, bribery	Violation of laws (e.g., MiFID II, SOX, AMLD, FCPA)
+Extreme compliance failure	Knowingly violating sanctions, ignoring KYC for PEPs	Compliance departments prevent this structurally
+Negligence of core duties	Ignoring regulator deadlines (e.g., Basel III, FINMA)	Strong internal governance prevents this
+Moral/ethical breach	Retaliating against whistleblowers, exploiting clients	Major legal and reputational risk
+Reckless ops decisions	Turning off audit trails, deleting loss data, disabling logging	Violates internal controls and audit compliance
+Exposing systemic risk intentionally	Allowing open access to risk models, public release of trading algorithms	Unfathomable from a business standpoint
+Absurd scenarios	CEO trading crypto memes via internal funds	Unrealistic and violates operational risk realism
+
+
+⸻
+
+🔍 2. Data Sources to Build This List Yourself
+
+A. UBS & Peer Bank Policies (non-public scenarios)
+	•	Internal documents like:
+	•	Code of Conduct
+	•	Operational Risk Policies
+	•	Compliance Manuals
+	•	Internal Control Frameworks (e.g., SOX compliance structure)
+
+Check public equivalents:
+	•	UBS Code of Conduct (public)
+	•	JP Morgan, HSBC, Citi, Deutsche Bank also publish similar
+
+⸻
+
+B. Public Enforcement Actions (shows what has gone wrong)
+
+Useful to define boundary of what’s wrong but possible vs impossible:
+	•	FINMA enforcement reports
+	•	SEC enforcement database
+	•	FCA Final Notices
+	•	ORX Scenarios (paywalled but summaries exist)
+
+Extract what did happen and invert it to define what won’t happen (e.g., “intentional sanctions violation” = red flag).
+
+⸻
+
+C. Basel Committee & Regulatory Expectations
+
+Check documents from:
+	•	Basel Committee on Banking Supervision
+	•	EBA Guidelines
+	•	Swiss Financial Market Supervisory Authority (FINMA)
+
+These include expectations around:
+	•	Risk governance
+	•	Control environment
+	•	3-lines-of-defense model
+
+Anything contradicting these norms is a “red line.”
+
+⸻
+
+D. Whistleblower & Lawsuit Case Studies
+
+Platforms:
+	•	Banking cases on Justia
+	•	Reuters/FT banking scandals
+	•	Books like “Too Big to Fail” or “Dark Towers”
+
+Even these “true” scenarios should be trimmed to exclude intentional criminality, since they’re one-off violations rather than systemic behaviors.
+
+⸻
+
+🧠 3. Techniques to Restrict LLMs
+
+Once you have this list, you can:
+
+🔒 A. Use a “Guardrails” Prompt
+
+Never generate scenarios where:
+- The bank engages in illegal activity knowingly
+- Regulatory deadlines are missed with no internal escalation
+- Client funds are stolen or misused
+- Internal controls are bypassed by executives
+
+If any part of the input hints at such actions, reject it or reframe it with internal detection/escalation.
+
+📏 B. Apply a Post-Generation Filter
+
+After the LLM generates a scenario, run a classifier (or regex if simple) to filter:
+
+FORBIDDEN_TERMS = [
+    "steal", "intentionally defraud", "disable audit logs", 
+    "missed regulator deadline with no response", "ignored AML"
+]
+
+def is_plausible(scenario: str) -> bool:
+    return not any(term in scenario.lower() for term in FORBIDDEN_TERMS)
+
