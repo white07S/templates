@@ -22,3 +22,26 @@ So on.
 Return a nested json.
 
 Give me best solution for this problem which is most accurate, it can be bit slow but I want most accurate solution
+
+
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+
+source = "testing_pdf.pdf"
+
+# Specify the path to your locally downloaded models
+artifacts_path = "/path/to/local/docling-models"  # Replace with your actual path
+
+# Create pipeline options with the local artifacts path
+pipeline_options = PdfPipelineOptions(artifacts_path=artifacts_path)
+
+# Create the converter with format options
+converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+    }
+)
+
+result = converter.convert(source)
+print(result.document.export_to_markdown())
