@@ -45,3 +45,345 @@ converter = DocumentConverter(
 
 result = converter.convert(source)
 print(result.document.export_to_markdown())
+
+
+
+import concurrent.futures
+import subprocess
+import time
+import json
+import requests
+import csv
+import numpy as np
+from skopt import gp_minimize
+from skopt.space import Integer, Real, Categorical
+from skopt.utils import use_named_args
+import signal
+
+# Configuration
+MODEL = "deepseek-ai/deepseek-llm-r1-67b"
+PORT = 8000
+GPU_MEM_PER_A100 = 40960  # 40GB in MB
+MAX_TRIALS = 30  # Maximum optimization iterations
+RANDOM_STARTS = 8  # Random initial evaluations
+
+# Realistic workload profiles
+WORKLOAD_PROFILES = [
+    {"input_tokens": 512, "output_tokens": 512, "concurrency": 16, "name": "short_scenario"},
+    {"input_tokens": 1024, "output_tokens": 768, "concurrency": 12, "name": "medium_doc"},
+    {"input_tokens": 2048, "output_tokens": 1024, "concurrency": 8, "name": "long_analysis"}
+]
+
+# Bayesian search space
+PARAM_SPACE = [
+    Categorical([16, 32], name='block_size'),
+    Integer(128, 512, name='max_num_seqs'),
+    Real(0.80, 0.97, name='gpu_memory_utilization'),
+    Categorical([4096, 8192, 16384], name='max_model_len')
+]
+
+# Results tracking
+global_results = []
+best_score = -np.inf
+best_params = None
+
+def generate_realistic_prompt(input_tokens):
+    """Generate consulting-style prompts for risk scenarios"""
+    base = "Generate a detailed non-financial risk scenario for a global manufacturing company. "
+    base += "Consider supply chain disruptions, ESG factors, and geopolitical risks. "
+    base += "Include: 1) Risk drivers 2) Potential impacts 3) Mitigation strategies. "
+    
+    # Expand to required token length with relevant content
+    details = [
+        "Supply chain vulnerabilities: " + "raw material shortage, logistics delays, single-source dependencies " * 10,
+        "ESG considerations: " + "carbon footprint, waste management, labor practices, community relations " * 10,
+        "Geopolitical factors: " + "trade wars, regulatory changes, political instability, sanctions " * 10
+    ]
+    return base + details[input_tokens % 3][:input_tokens*5]
+
+def start_vllm_server(params):
+    """Start vLLM server with given parameters"""
+    cmd = [
+        "python", "-m", "vllm.entrypoints.api_server",
+        "--model", MODEL,
+        "--port", str(PORT),
+        "--tensor-parallel-size", "4",  # Fixed for 4 GPUs
+        "--block-size", str(params["block_size"]),
+        "--max-num-seqs", str(params["max_num_seqs"]),
+        "--gpu-memory-utilization", str(params["gpu_memory_utilization"]),
+        "--max-model-len", str(params["max_model_len"]),
+        "--enforce-eager"  # Reduces fragmentation
+    ]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def check_server_ready(timeout=300):
+    """Check if server is ready to accept requests"""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            response = requests.get(f"http://localhost:{PORT}/health", timeout=2)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+        time.sleep(2)
+    return False
+
+def send_request(payload):
+    """Send single request and return latency"""
+    start = time.time()
+    try:
+        response = requests.post(
+            f"http://localhost:{PORT}/generate",
+            json=payload,
+            timeout=120  # Longer timeout for large generations
+        )
+        response.raise_for_status()
+        return time.time() - start
+    except Exception as e:
+        print(f"Request failed: {str(e)}")
+        return 120  # Penalty for failed requests
+
+def run_workload(profile):
+    """Benchmark with realistic workload characteristics"""
+    payload = {
+        "prompt": generate_realistic_prompt(profile["input_tokens"]),
+        "max_tokens": profile["output_tokens"],
+        "temperature": 0.7
+    }
+    
+    latencies = []
+    start_time = time.time()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=profile["concurrency"]) as executor:
+        futures = [executor.submit(send_request, payload) for _ in range(profile["concurrency"])]
+        for future in concurrent.futures.as_completed(futures):
+            latencies.append(future.result())
+    
+    total_time = time.time() - start_time
+    throughput = profile["concurrency"] / total_time
+    token_speed = (profile["output_tokens"] * profile["concurrency"]) / total_time
+    
+    # Calculate latency percentiles
+    p95 = np.percentile(latencies, 95) if latencies else 0
+    p99 = np.percentile(latencies, 99) if latencies else 0
+    
+    return {
+        "throughput_rps": throughput,
+        "token_speed": token_speed,
+        "avg_latency": np.mean(latencies) if latencies else 0,
+        "p95_latency": p95,
+        "p99_latency": p99,
+        "workload": profile["name"]
+    }
+
+def get_gpu_metrics():
+    """Get GPU utilization and memory stats"""
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True
+    )
+    metrics = []
+    for line in result.stdout.strip().split('\n'):
+        util, mem = line.split(', ')
+        metrics.append({
+            "gpu_util": float(util),
+            "vram_used": float(mem)
+        })
+    return metrics
+
+def evaluate_config(params):
+    """Evaluate configuration with Bayesian optimization"""
+    server = start_vllm_server(params)
+    if not check_server_ready():
+        server.terminate()
+        return None, "Server failed to start"
+    
+    try:
+        results = {}
+        
+        for profile in WORKLOAD_PROFILES:
+            # Warm-up run
+            try:
+                run_workload(profile)
+            except:
+                pass
+            
+            # Actual measurement with retries
+            for attempt in range(3):
+                try:
+                    workload_result = run_workload(profile)
+                    results[profile["name"]] = workload_result
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    time.sleep(5)
+        
+        # Get GPU metrics after benchmark
+        gpu_metrics = get_gpu_metrics()
+        avg_vram_used = sum(m["vram_used"] for m in gpu_metrics) / len(gpu_metrics)
+        
+        # Calculate overall score (weighted harmonic mean)
+        weights = {"short_scenario": 0.2, "medium_doc": 0.3, "long_analysis": 0.5}
+        weighted_speed = 0
+        weighted_latency = 0
+        
+        for name, res in results.items():
+            weighted_speed += weights[name] * res["token_speed"]
+            weighted_latency += weights[name] * res["p99_latency"]
+        
+        # Penalize high VRAM usage
+        vram_penalty = max(0, (avg_vram_used / GPU_MEM_PER_A100) - 0.95) * 100
+        
+        # Final score formula
+        score = weighted_speed / max(1, weighted_latency) - vram_penalty
+        
+        return {
+            "score": score,
+            "results": results,
+            "gpu_metrics": gpu_metrics,
+            "params": params.copy()
+        }, None
+        
+    except Exception as e:
+        return None, f"Evaluation failed: {str(e)}"
+    finally:
+        try:
+            server.terminate()
+            server.wait(timeout=10)
+        except:
+            server.kill()
+        time.sleep(5)  # Cleanup time
+
+def save_results(result):
+    """Save results to CSV and JSON for analysis"""
+    global best_score, best_params
+    
+    # Save to CSV
+    with open('bayesian_tuning_results.csv', 'a') as f:
+        writer = csv.writer(f)
+        if f.tell() == 0:
+            header = ["block_size", "max_num_seqs", "gpu_mem_util", "max_model_len", 
+                      "score", "vram_used", "token_speed", "p99_latency"]
+            writer.writerow(header)
+            
+        row = [
+            result["params"]["block_size"],
+            result["params"]["max_num_seqs"],
+            result["params"]["gpu_memory_utilization"],
+            result["params"]["max_model_len"],
+            result["score"],
+            sum(m["vram_used"] for m in result["gpu_metrics"]) / 4,
+            result["results"]["long_analysis"]["token_speed"],
+            result["results"]["long_analysis"]["p99_latency"]
+        ]
+        writer.writerow(row)
+    
+    # Save detailed results to JSON
+    with open(f'trial_{len(global_results)}.json', 'w') as f:
+        json.dump(result, f, indent=2)
+    
+    # Update best configuration
+    if result["score"] > best_score:
+        best_score = result["score"]
+        best_params = result["params"]
+        print(f"🔥 New best config! Score: {best_score:.2f}")
+        with open('best_config.json', 'w') as f:
+            json.dump(best_params, f, indent=2)
+
+# Bayesian optimization objective function
+@use_named_args(dimensions=PARAM_SPACE)
+def objective(block_size, max_num_seqs, gpu_memory_utilization, max_model_len):
+    """Objective function for Bayesian optimization"""
+    params = {
+        "block_size": block_size,
+        "max_num_seqs": int(max_num_seqs),
+        "gpu_memory_utilization": float(gpu_memory_utilization),
+        "max_model_len": max_model_len
+    }
+    
+    print(f"\nEvaluating configuration:")
+    print(f"• Block size: {block_size}")
+    print(f"• Max sequences: {int(max_num_seqs)}")
+    print(f"• GPU mem util: {float(gpu_memory_utilization):.3f}")
+    print(f"• Max model len: {max_model_len}")
+    
+    result, error = evaluate_config(params)
+    
+    if error:
+        print(f"❌ Evaluation failed: {error}")
+        # Return large penalty for failed evaluations
+        return -1000
+    
+    # Save successful results
+    global_results.append(result)
+    save_results(result)
+    
+    # We minimize negative score (equivalent to maximizing score)
+    return -result["score"]
+
+def run_bayesian_optimization():
+    """Run Bayesian optimization with GP"""
+    # Set up signal handler for graceful interruption
+    def signal_handler(sig, frame):
+        print("\nOptimization interrupted. Saving results...")
+        with open('interim_results.json', 'w') as f:
+            json.dump(global_results, f, indent=2)
+        exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Run optimization
+    res = gp_minimize(
+        func=objective,
+        dimensions=PARAM_SPACE,
+        n_calls=MAX_TRIALS,
+        n_initial_points=RANDOM_STARTS,
+        random_state=42,
+        verbose=True,
+        acq_func='EI',  # Expected Improvement
+        noise=0.1       # Account for evaluation noise
+    )
+    
+    print("\nOptimization complete!")
+    print(f"Best score: {-res.fun:.2f}")
+    print("Best parameters:")
+    print(f"• Block size: {res.x[0]}")
+    print(f"• Max sequences: {int(res.x[1])}")
+    print(f"• GPU mem util: {res.x[2]:.3f}")
+    print(f"• Max model len: {res.x[3]}")
+    
+    # Save final results
+    with open('final_results.json', 'w') as f:
+        json.dump({
+            "best_score": -res.fun,
+            "best_params": {
+                "block_size": res.x[0],
+                "max_num_seqs": int(res.x[1]),
+                "gpu_memory_utilization": res.x[2],
+                "max_model_len": res.x[3]
+            },
+            "all_trials": global_results
+        }, f, indent=2)
+    
+    return res
+
+if __name__ == "__main__":
+    # Create results file
+    open('bayesian_tuning_results.csv', 'w').close()
+    
+    # Start optimization
+    result = run_bayesian_optimization()
+    
+    # Print best configuration for production use
+    print("\nRecommended production configuration:")
+    print(f"python -m vllm.entrypoints.api_server \\")
+    print(f"  --model {MODEL} \\")
+    print(f"  --tensor-parallel-size 4 \\")
+    print(f"  --block-size {result.x[0]} \\")
+    print(f"  --max-num-seqs {int(result.x[1])} \\")
+    print(f"  --gpu-memory-utilization {result.x[2]:.3f} \\")
+    print(f"  --max-model-len {result.x[3]} \\")
+    print(f"  --enforce-eager")
