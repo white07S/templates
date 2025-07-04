@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hierarchical Risk Heatmap</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            color: #333;
+            margin: 0 0 10px 0;
+        }
+        .header p {
+            color: #666;
+            margin: 0;
+        }
+        .chart-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+        }
+        .controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .controls button {
+            padding: 10px 20px;
+            margin: 0 5px;
+            border: none;
+            border-radius: 5px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .controls button:hover {
+            background: #0056b3;
+        }
+        .controls button.active {
+            background: #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Hierarchical Risk Assessment Heatmap</h1>
+            <p>Interactive visualization showing risk levels across Taxonomy → Business Division → Unit hierarchy</p>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #d32f2f;"></div>
+                <span>Critical Risk (9-10)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f57c00;"></div>
+                <span>High Risk (7-8)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #fbc02d;"></div>
+                <span>Medium Risk (5-6)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #689f38;"></div>
+                <span>Low Risk (3-4)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #388e3c;"></div>
+                <span>Minimal Risk (1-2)</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="resetBtn">Reset View</button>
+            <button id="drillBtn">Enable Drill Down</button>
+        </div>
+
+        <div class="chart-container">
+            <div id="main" style="width: 100%; height: 800px;"></div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize ECharts
+        const chart = echarts.init(document.getElementById('main'));
+        
+        // Mock data generation
+        function generateMockData() {
+            const taxonomies = [
+                'Financial Services', 'Technology Operations', 'Human Resources', 'Legal & Compliance',
+                'Supply Chain', 'Customer Experience', 'Data Management', 'Infrastructure',
+                'Marketing & Sales', 'Product Development', 'Quality Assurance', 'Security',
+                'Operations', 'Strategic Planning', 'Risk Management', 'Governance',
+                'Regulatory Affairs', 'Business Intelligence', 'Project Management', 'Procurement',
+                'Environmental', 'Social Impact', 'Innovation', 'Digital Transformation'
+            ];
+            
+            const divisionTemplates = {
+                'Financial Services': ['Investment Banking', 'Retail Banking', 'Corporate Banking', 'Asset Management', 'Risk Assessment', 'Compliance', 'Treasury'],
+                'Technology Operations': ['Software Development', 'Infrastructure', 'Security', 'Data Analytics', 'Cloud Services', 'DevOps'],
+                'Human Resources': ['Talent Acquisition', 'Employee Relations', 'Benefits Administration', 'Training & Development', 'Performance Management'],
+                'Legal & Compliance': ['Corporate Law', 'Regulatory Compliance', 'Contract Management', 'Litigation', 'Intellectual Property'],
+                'Supply Chain': ['Procurement', 'Logistics', 'Vendor Management', 'Inventory Control', 'Distribution', 'Quality Control'],
+                'Customer Experience': ['Customer Service', 'Support Operations', 'Client Relations', 'Feedback Management', 'User Experience'],
+                'Data Management': ['Data Governance', 'Analytics', 'Business Intelligence', 'Data Security', 'Storage Management'],
+                'Infrastructure': ['Network Operations', 'Facilities Management', 'Equipment Maintenance', 'Capacity Planning', 'Security Systems']
+            };
+            
+            function getRiskColor(risk) {
+                if (risk >= 9) return '#d32f2f';
+                if (risk >= 7) return '#f57c00';
+                if (risk >= 5) return '#fbc02d';
+                if (risk >= 3) return '#689f38';
+                return '#388e3c';
+            }
+            
+            function generateUnits(divisionName, count) {
+                const units = [];
+                for (let i = 1; i <= count; i++) {
+                    const risk = Math.floor(Math.random() * 10) + 1;
+                    units.push({
+                        name: `${divisionName} Unit ${i}`,
+                        value: Math.floor(Math.random() * 50) + 10,
+                        risk: risk,
+                        itemStyle: {
+                            color: getRiskColor(risk)
+                        }
+                    });
+                }
+                return units;
+            }
+            
+            const data = [];
+            
+            taxonomies.forEach(taxonomy => {
+                const divisions = divisionTemplates[taxonomy] || 
+                    Array.from({length: Math.floor(Math.random() * 6) + 5}, (_, i) => `${taxonomy} Division ${i + 1}`);
+                
+                const taxonomyChildren = [];
+                let taxonomyTotalValue = 0;
+                let taxonomyTotalRisk = 0;
+                let taxonomyUnitCount = 0;
+                
+                divisions.forEach(division => {
+                    const unitCount = Math.floor(Math.random() * 11) + 5;
+                    const units = generateUnits(division, unitCount);
+                    
+                    const divisionValue = units.reduce((sum, unit) => sum + unit.value, 0);
+                    const divisionRisk = units.reduce((sum, unit) => sum + unit.risk, 0) / units.length;
+                    
+                    taxonomyTotalValue += divisionValue;
+                    taxonomyTotalRisk += divisionRisk;
+                    taxonomyUnitCount += units.length;
+                    
+                    taxonomyChildren.push({
+                        name: division,
+                        value: divisionValue,
+                        risk: Math.round(divisionRisk * 10) / 10,
+                        itemStyle: {
+                            color: getRiskColor(divisionRisk)
+                        },
+                        children: units
+                    });
+                });
+                
+                const avgRisk = taxonomyTotalRisk / divisions.length;
+                
+                data.push({
+                    name: taxonomy,
+                    value: taxonomyTotalValue,
+                    risk: Math.round(avgRisk * 10) / 10,
+                    units: taxonomyUnitCount,
+                    itemStyle: {
+                        color: getRiskColor(avgRisk)
+                    },
+                    children: taxonomyChildren
+                });
+            });
+            
+            return data;
+        }
+        
+        const mockData = generateMockData();
+        
+        // Chart configuration
+        const option = {
+            title: {
+                text: 'Risk Assessment Treemap',
+                left: 'center',
+                top: 20,
+                textStyle: {
+                    fontSize: 18,
+                    fontWeight: 'bold'
+                }
+            },
+            tooltip: {
+                trigger: 'item',
+                formatter: function(params) {
+                    const data = params.data;
+                    let html = `<div style="padding: 10px;">
+                        <strong>${data.name}</strong><br/>
+                        <span style="color: #666;">Risk Level: <strong style="color: ${data.itemStyle.color};">${data.risk}</strong></span><br/>
+                        <span style="color: #666;">Value: ${data.value}</span>`;
+                    
+                    if (data.units) {
+                        html += `<br/><span style="color: #666;">Total Units: ${data.units}</span>`;
+                    }
+                    
+                    html += `</div>`;
+                    return html;
+                }
+            },
+            series: [{
+                name: 'Risk Assessment',
+                type: 'treemap',
+                visibleMin: 300,
+                label: {
+                    show: true,
+                    formatter: function(params) {
+                        return params.name + '\n' + 'Risk: ' + params.data.risk;
+                    }
+                },
+                upperLabel: {
+                    show: true,
+                    height: 30,
+                    formatter: function(params) {
+                        return params.name + ' (Risk: ' + params.data.risk + ')';
+                    }
+                },
+                itemStyle: {
+                    borderColor: '#fff',
+                    borderWidth: 2,
+                    gapWidth: 2
+                },
+                emphasis: {
+                    itemStyle: {
+                        borderColor: '#333',
+                        borderWidth: 3
+                    }
+                },
+                levels: [
+                    {
+                        itemStyle: {
+                            borderWidth: 3,
+                            gapWidth: 3
+                        },
+                        upperLabel: {
+                            show: false
+                        }
+                    },
+                    {
+                        itemStyle: {
+                            borderWidth: 2,
+                            gapWidth: 2
+                        },
+                        emphasis: {
+                            itemStyle: {
+                                borderWidth: 3
+                            }
+                        }
+                    },
+                    {
+                        colorSaturation: [0.35, 0.5],
+                        itemStyle: {
+                            borderWidth: 1,
+                            gapWidth: 1,
+                            borderColorSaturation: 0.6
+                        }
+                    }
+                ],
+                data: mockData
+            }]
+        };
+        
+        // Set chart options
+        chart.setOption(option);
+        
+        // Event handlers
+        document.getElementById('resetBtn').addEventListener('click', function() {
+            chart.setOption(option);
+        });
+        
+        let drillDownEnabled = false;
+        document.getElementById('drillBtn').addEventListener('click', function() {
+            drillDownEnabled = !drillDownEnabled;
+            this.textContent = drillDownEnabled ? 'Disable Drill Down' : 'Enable Drill Down';
+            this.classList.toggle('active');
+        });
+        
+        // Chart click event for drill down
+        chart.on('click', function(params) {
+            if (drillDownEnabled && params.data.children) {
+                const newOption = {
+                    ...option,
+                    series: [{
+                        ...option.series[0],
+                        data: params.data.children
+                    }]
+                };
+                chart.setOption(newOption);
+            }
+        });
+        
+        // Responsive resize
+        window.addEventListener('resize', function() {
+            chart.resize();
+        });
+        
+        // Generate summary statistics
+        function generateSummary() {
+            let totalUnits = 0;
+            let riskDistribution = {critical: 0, high: 0, medium: 0, low: 0, minimal: 0};
+            
+            mockData.forEach(taxonomy => {
+                totalUnits += taxonomy.units;
+                taxonomy.children.forEach(division => {
+                    division.children.forEach(unit => {
+                        const risk = unit.risk;
+                        if (risk >= 9) riskDistribution.critical++;
+                        else if (risk >= 7) riskDistribution.high++;
+                        else if (risk >= 5) riskDistribution.medium++;
+                        else if (risk >= 3) riskDistribution.low++;
+                        else riskDistribution.minimal++;
+                    });
+                });
+            });
+            
+            console.log('Summary Statistics:');
+            console.log(`Total Taxonomies: ${mockData.length}`);
+            console.log(`Total Units: ${totalUnits}`);
+            console.log('Risk Distribution:', riskDistribution);
+        }
+        
+        generateSummary();
+    </script>
+</body>
+</html>
