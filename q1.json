@@ -1,0 +1,26 @@
+{
+  "Group": {
+    "analysis": "Q1 2025 showed Group PBT of $2,132m (underlying $2,586m) with total revenues of $11,904m and operating expenses of $9,218m. The cost/income ratio was 82.2% (77.4% underlying). Net credit loss expenses were $100m. Return on CET1 capital was 9.6% (11.3% underlying). The results included various integration items totaling $574m and gains from Swisscard transactions. Net profit attributable to shareholders was $1,692m with diluted EPS of $0.51.",
+    "implication_when_accessing_inherent_risk_for_rcsa": "The elevated cost/income ratio (82.2%) and ongoing integration expenses indicate heightened operational risk during the Credit Suisse integration period. Credit risk appears controlled with moderate net credit losses of $100m. The complexity of integration items and one-off transactions suggests increased operational and compliance risks requiring enhanced controls and monitoring."
+  },
+  "Global_Wealth_Management": {
+    "analysis": "GWM achieved PBT of $1,359m (underlying $1,545m) in Q1 2025 with revenues of $6,422m (+5% YoY). Operating expenses were $5,057m with a cost/income ratio of 78.8% (75.2% underlying). Net credit losses were minimal at $6m. Invested assets grew to $4,218bn with net new assets of $32bn. Revenue growth was driven by higher recurring net fee income and transaction-based income, partially offset by lower net interest income.",
+    "implication_when_accessing_inherent_risk_for_rcsa": "Strong asset growth and minimal credit losses indicate well-controlled credit risk. However, the dependency on market conditions for fee income creates market risk exposure. The relatively high cost/income ratio suggests operational efficiency risks. Client concentration and retention risks during integration period require monitoring."
+  },
+  "Personal_Corporate_Banking": {
+    "analysis": "P&C reported PBT of CHF 545m (underlying CHF 597m) with revenues declining 7% to CHF 1,989m, primarily due to lower net interest income. Operating expenses increased to CHF 1,396m including CHF 164m expense from Swisscard transactions. Net credit losses were CHF 48m, mainly from legacy Credit Suisse corporate loans. Cost/income ratio was 70.2% (62.2% underlying).",
+    "implication_when_accessing_inherent_risk_for_rcsa": "Elevated credit risk evident from CHF 48m net credit losses concentrated in legacy Credit Suisse corporate loan book. Interest rate risk materialized through declining net interest income. Integration complexity increases operational risk. The deteriorating cost/income ratio suggests efficiency challenges requiring attention."
+  },
+  "Asset_Management": {
+    "analysis": "AM generated PBT of $135m (underlying $208m) with revenues of $741m (-4% YoY) primarily due to lower net management fees. Operating expenses decreased 9% to $606m. Cost/income ratio was 81.7% (71.9% underlying). Invested assets increased to $1,796bn with net new money of $7bn ($5bn excluding money market flows). A provision release for fund-administration expenses positively impacted results.",
+    "implication_when_accessing_inherent_risk_for_rcsa": "Revenue pressure from declining management fees indicates business model risk and fee compression. High cost/income ratio suggests operational efficiency challenges. Market risk exposure through AUM sensitivity to market movements. Positive net flows indicate controlled reputational risk, but integration activities may increase operational complexity."
+  },
+  "Investment_Bank": {
+    "analysis": "IB delivered strong PBT of $722m (underlying $696m) with revenues surging 16% to $3,183m driven by Global Markets performance. Operating expenses increased 12% to $2,427m mainly from higher personnel costs. Net credit losses were $35m. Cost/income ratio was 76.2% (76.0% underlying). Return on attributed equity was robust at 16.3% (15.8% underlying).",
+    "implication_when_accessing_inherent_risk_for_rcsa": "Strong revenue growth indicates successful market risk management and trading capabilities. However, revenue volatility creates inherent market and liquidity risks. Increased personnel expenses suggest retention and compensation risks. Credit losses remain controlled but require monitoring given market-sensitive exposures. High operational complexity from Global Markets activities."
+  },
+  "Non-core_and_Legacy": {
+    "analysis": "NCL reported a PBT loss of $(391m) (underlying profit $200m) with revenues of $284m, down significantly from prior year. Included $97m gain from sale of Select Portfolio Servicing. Net credit losses were $7m (down from $36m in Q1 2024). Operating expenses decreased substantially to $669m as the wind-down progresses. The division continues to reduce its portfolio size.",
+    "implication_when_accessing_inherent_risk_for_rcsa": "Wind-down activities create heightened operational and execution risks. Legacy credit exposures require careful management despite improving loss trends. Asset disposal timing creates market risk. Reduced expenses indicate successful de-risking but remaining positions may have concentrated risks. Reputational risk from legacy issues requires ongoing management."
+  }
+}
