@@ -1,0 +1,21 @@
+vllm serve Qwen/Qwen3-32B \
+  --tensor-parallel-size 2 \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype bfloat16 \
+  --gpu-memory-utilization 0.9 \
+  --max-model-len 32768 \
+  --enable-chunked-prefill \
+  --enable-prefix-caching
+
+
+
+curl localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-32B",
+    "messages":[
+      {"role":"system","content":"You are helpful."},
+      {"role":"user","content":"Tell me a joke."}
+    ]
+  }'
