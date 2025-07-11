@@ -1,28 +1,31 @@
-import cognee
-import asyncio
+import os
+
+# Set all environment variables BEFORE importing cognee
 os.environ["DO_NOT_TRACK"] = "1"
 os.environ["TELEMETRY_DISABLED"] = "1"
 os.environ["ANALYTICS_DISABLED"] = "1"
 os.environ["NO_ANALYTICS"] = "1"
 
+# Set cognee configuration via environment variables
+os.environ["LLM_PROVIDER"] = "custom"
+os.environ["LLM_MODEL"] = "your-actual-model-name"
+os.environ["LLM_ENDPOINT"] = "http://localhost:8000/v1"
+os.environ["LLM_API_KEY"] = "sk-dummy-local-vllm-key-12345"
+
+os.environ["EMBEDDING_PROVIDER"] = "custom"
+os.environ["EMBEDDING_MODEL"] = "your-actual-embedding-model-name"
+os.environ["EMBEDDING_ENDPOINT"] = "http://localhost:8000/v1/embeddings"
+os.environ["EMBEDDING_API_KEY"] = "sk-dummy-embedding-key-67890"
+os.environ["EMBEDDING_DIMENSIONS"] = "1536"
+
+# NOW import cognee
+import cognee
+import asyncio
+
 async def main():
-    # Configure LLM (your local vLLM)
-    cognee.config.llm_provider = "custom"
-    cognee.config.llm_model = "your-model-name"
-    cognee.config.llm_endpoint = "http://localhost:8000/v1"
-    cognee.config.llm_api_key = "EMPTY"
-    
-    # Configure embeddings (also your local vLLM)
-    cognee.config.embedding_provider = "custom"
-    cognee.config.embedding_model = "your-embedding-model-name"
-    cognee.config.embedding_endpoint = "http://localhost:8000/v1/embeddings"
-    cognee.config.embedding_api_key = "EMPTY"
-    cognee.config.embedding_dimensions = 1536  # Adjust for your model
-    
-    # Your cognee workflow
-    await cognee.add("Your text data here")
+    await cognee.add("Natural language processing is a subfield of computer science.")
     await cognee.cognify()
-    results = await cognee.search("Your query here")
+    results = await cognee.search("What is NLP?")
     
     for result in results:
         print(result)
