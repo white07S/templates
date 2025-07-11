@@ -1,74 +1,71 @@
-import os
-import cognee
-import asyncio
+from llama_index.core import Document, KnowledgeGraphIndex, Settings
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
 
-# CRITICAL: Set environment variables BEFORE importing cognee
-# Cognee validates these at startup, not when config is set
-
-# Disable telemetry
-os.environ["DO_NOT_TRACK"] = "1"
-os.environ["TELEMETRY_DISABLED"] = "1"
-os.environ["ANALYTICS_DISABLED"] = "1" 
-os.environ["NO_ANALYTICS"] = "1"
-
-# LLM Configuration - Use environment variables (not config attributes)
-os.environ["LLM_PROVIDER"] = "custom"  # Use "custom" for local vLLM
-os.environ["LLM_API_KEY"] = "sk-dummy-local-vllm-key-123456789"  # Required, even for local
-os.environ["LLM_MODEL"] = "your-actual-model-name"  # Replace with your model name (e.g., "llama2-7b-chat")
-os.environ["LLM_ENDPOINT"] = "http://localhost:8000/v1"
-
-# Embedding Configuration (if your vLLM supports embeddings)
-# Option 1: Use vLLM for embeddings (if supported)
-os.environ["EMBEDDING_PROVIDER"] = "custom"
-os.environ["EMBEDDING_API_KEY"] = "sk-dummy-embedding-key-123456789"
-os.environ["EMBEDDING_MODEL"] = "your-embedding-model-name"  # Replace with your embedding model
-os.environ["EMBEDDING_ENDPOINT"] = "http://localhost:8000/v1/embeddings"
-os.environ["EMBEDDING_DIMENSIONS"] = "1536"  # Adjust based on your model
-
-# Option 2: Use local embeddings (FastEmbed) if vLLM doesn't support embeddings
-# Uncomment these lines and comment out the above embedding config if needed:
-# os.environ["EMBEDDING_PROVIDER"] = "fastembed"
-# os.environ["EMBEDDING_MODEL"] = "sentence-transformers/all-MiniLM-L6-v2"
-# os.environ["EMBEDDING_DIMENSIONS"] = "384"
-# os.environ["EMBEDDING_MAX_TOKENS"] = "256"
-
-async def main():
-    try:
-        # Verify environment variables are set
-        print(f"LLM Provider: {os.environ.get('LLM_PROVIDER')}")
-        print(f"LLM Model: {os.environ.get('LLM_MODEL')}")
-        print(f"LLM Endpoint: {os.environ.get('LLM_ENDPOINT')}")
-        print(f"LLM API Key: {os.environ.get('LLM_API_KEY')[:10]}...")  # Only show first 10 chars
+class KnowledgeGraphSystem:
+    def __init__(self):
+        # Configure VLLM endpoints
+        self.llm = OpenAI(
+            api_base="http://localhost:8000/v1",
+            api_key="fake-key",  # VLLM doesn't need real key
+            temperature=0
+        )
         
-        # Test if vLLM server is reachable
-        import requests
-        try:
-            response = requests.get("http://localhost:8000/v1/models", timeout=5)
-            print(f"vLLM server status: {response.status_code}")
-            if response.status_code == 200:
-                models = response.json()
-                print(f"Available models: {models}")
-            else:
-                print("vLLM server not responding correctly")
-        except Exception as e:
-            print(f"Cannot reach vLLM server: {e}")
-            return
+        self.embedding = OpenAIEmbedding(
+            api_base="http://localhost:8000/v1", 
+            api_key="fake-key"
+        )
         
-        # Your cognee workflow
-        await cognee.add("Natural language processing is a subfield of computer science.")
-        await cognee.cognify()
-        results = await cognee.search("What is NLP?")
+        # Set global settings
+        Settings.llm = self.llm
+        Settings.embed_model = self.embedding
+        Settings.chunk_size = 512
         
-        for result in results:
-            print(result)
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        print("\nTroubleshooting steps:")
-        print("1. Make sure your vLLM server is running: python -m vllm.entrypoints.openai.api_server --model YOUR_MODEL")
-        print("2. Test the server: curl http://localhost:8000/v1/models")
-        print("3. Replace 'your-actual-model-name' with the exact model name from step 2")
-        print("4. If using embeddings, make sure your vLLM supports the /v1/embeddings endpoint")
+        self.index = None
+    
+    def ingest(self, text: str):
+        """Build knowledge graph + embeddings from text"""
+        doc = Document(text=text)
+        
+        self.index = KnowledgeGraphIndex.from_documents(
+            [doc],
+            max_triplets_per_chunk=3,
+            include_embeddings=True,
+            show_progress=True
+        )
+        
+        print("✅ Knowledge graph and embeddings built")
+    
+    def query(self, question: str):
+        """Query using both knowledge graph and embeddings"""
+        if not self.index:
+            return "❌ No data ingested yet. Call ingest() first."
+        
+        # Use hybrid mode for both graph relationships and embeddings
+        query_engine = self.index.as_query_engine(
+            include_text=True,
+            response_mode="tree_summarize", 
+            embedding_mode="hybrid",
+            similarity_top_k=5
+        )
+        
+        response = query_engine.query(question)
+        return str(response)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Usage
+kg = KnowledgeGraphSystem()
+
+# Ingest your data
+text = """
+Tesla is an electric vehicle company founded by Elon Musk. 
+The company produces electric cars, solar panels, and energy storage systems.
+Tesla's main factory is located in Fremont, California.
+Elon Musk is also the CEO of SpaceX, which develops rockets and spacecraft.
+"""
+
+kg.ingest(text)
+
+# Query the system
+print(kg.query("What does Tesla produce?"))
+print(kg.query("Who founded Tesla?"))
+print(kg.query("Tell me about Elon Musk's companies"))
