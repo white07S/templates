@@ -69,3 +69,6 @@ kg.ingest(text)
 print(kg.query("What does Tesla produce?"))
 print(kg.query("Who founded Tesla?"))
 print(kg.query("Tell me about Elon Musk's companies"))
+
+
+pip install llama-index llama-index-llms-openai llama-index-embeddings-openai
