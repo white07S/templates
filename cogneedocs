@@ -1,5 +1,9 @@
 import cognee
 import asyncio
+os.environ["DO_NOT_TRACK"] = "1"
+os.environ["TELEMETRY_DISABLED"] = "1"
+os.environ["ANALYTICS_DISABLED"] = "1"
+os.environ["NO_ANALYTICS"] = "1"
 
 async def main():
     # Configure LLM (your local vLLM)
