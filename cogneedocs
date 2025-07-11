@@ -2,35 +2,58 @@ import os
 import cognee
 import asyncio
 
-# Disable telemetry before importing/using cognee
+# CRITICAL: Set environment variables BEFORE importing cognee
+# Cognee validates these at startup, not when config is set
+
+# Disable telemetry
 os.environ["DO_NOT_TRACK"] = "1"
 os.environ["TELEMETRY_DISABLED"] = "1"
-os.environ["ANALYTICS_DISABLED"] = "1"
+os.environ["ANALYTICS_DISABLED"] = "1" 
 os.environ["NO_ANALYTICS"] = "1"
 
-# Set vLLM environment variables (required for LiteLLM)
-os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000/v1"
-os.environ["HOSTED_VLLM_API_KEY"] = "sk-dummy-api-key-for-local-vllm-12345"  # Optional but good practice
+# LLM Configuration - Use environment variables (not config attributes)
+os.environ["LLM_PROVIDER"] = "custom"  # Use "custom" for local vLLM
+os.environ["LLM_API_KEY"] = "sk-dummy-local-vllm-key-123456789"  # Required, even for local
+os.environ["LLM_MODEL"] = "your-actual-model-name"  # Replace with your model name (e.g., "llama2-7b-chat")
+os.environ["LLM_ENDPOINT"] = "http://localhost:8000/v1"
+
+# Embedding Configuration (if your vLLM supports embeddings)
+# Option 1: Use vLLM for embeddings (if supported)
+os.environ["EMBEDDING_PROVIDER"] = "custom"
+os.environ["EMBEDDING_API_KEY"] = "sk-dummy-embedding-key-123456789"
+os.environ["EMBEDDING_MODEL"] = "your-embedding-model-name"  # Replace with your embedding model
+os.environ["EMBEDDING_ENDPOINT"] = "http://localhost:8000/v1/embeddings"
+os.environ["EMBEDDING_DIMENSIONS"] = "1536"  # Adjust based on your model
+
+# Option 2: Use local embeddings (FastEmbed) if vLLM doesn't support embeddings
+# Uncomment these lines and comment out the above embedding config if needed:
+# os.environ["EMBEDDING_PROVIDER"] = "fastembed"
+# os.environ["EMBEDDING_MODEL"] = "sentence-transformers/all-MiniLM-L6-v2"
+# os.environ["EMBEDDING_DIMENSIONS"] = "384"
+# os.environ["EMBEDDING_MAX_TOKENS"] = "256"
 
 async def main():
-    # Configure cognee to use your local vLLM - KEY FIXES:
-    # 1. Use "hosted_vllm" instead of "custom"
-    # 2. Use "hosted_vllm/your-model-name" format for model
-    # 3. Set api_base correctly
-    
-    cognee.config.llm_provider = "hosted_vllm"
-    cognee.config.llm_model = "hosted_vllm/your-actual-model-name"  # Replace with your model (e.g., "hosted_vllm/mistral-7b-instruct")
-    cognee.config.llm_endpoint = "http://localhost:8000/v1"
-    cognee.config.llm_api_key = "sk-dummy-api-key-for-local-vllm-12345"  # Dummy but valid-looking key
-    
-    # Configure embeddings - if your vLLM supports embeddings
-    cognee.config.embedding_provider = "hosted_vllm"
-    cognee.config.embedding_model = "hosted_vllm/your-actual-embedding-model-name"  # Replace with your embedding model
-    cognee.config.embedding_endpoint = "http://localhost:8000/v1/embeddings"
-    cognee.config.embedding_api_key = "sk-dummy-embedding-key-for-local-vllm-67890"  # Dummy but valid-looking key
-    cognee.config.embedding_dimensions = 1536  # Adjust based on your embedding model
-    
     try:
+        # Verify environment variables are set
+        print(f"LLM Provider: {os.environ.get('LLM_PROVIDER')}")
+        print(f"LLM Model: {os.environ.get('LLM_MODEL')}")
+        print(f"LLM Endpoint: {os.environ.get('LLM_ENDPOINT')}")
+        print(f"LLM API Key: {os.environ.get('LLM_API_KEY')[:10]}...")  # Only show first 10 chars
+        
+        # Test if vLLM server is reachable
+        import requests
+        try:
+            response = requests.get("http://localhost:8000/v1/models", timeout=5)
+            print(f"vLLM server status: {response.status_code}")
+            if response.status_code == 200:
+                models = response.json()
+                print(f"Available models: {models}")
+            else:
+                print("vLLM server not responding correctly")
+        except Exception as e:
+            print(f"Cannot reach vLLM server: {e}")
+            return
+        
         # Your cognee workflow
         await cognee.add("Natural language processing is a subfield of computer science.")
         await cognee.cognify()
@@ -41,6 +64,11 @@ async def main():
             
     except Exception as e:
         print(f"Error: {e}")
-        print("Make sure your vLLM server is running on http://localhost:8000")
+        print("\nTroubleshooting steps:")
+        print("1. Make sure your vLLM server is running: python -m vllm.entrypoints.openai.api_server --model YOUR_MODEL")
+        print("2. Test the server: curl http://localhost:8000/v1/models")
+        print("3. Replace 'your-actual-model-name' with the exact model name from step 2")
+        print("4. If using embeddings, make sure your vLLM supports the /v1/embeddings endpoint")
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
