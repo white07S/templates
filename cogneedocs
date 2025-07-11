@@ -1,131 +1,26 @@
-Here’s a concise comparison of Cognee and Mem0 as long-term memory layers for AI agents, how they differ architecturally and functionally, and examples showing how you can hook either up to a local vLLM server acting as an OpenAI-compatible endpoint.
-
-Both Cognee and Mem0 provide “external” memory layers that let your agents recall past interactions, but they take very different approaches under the hood. Cognee builds a knowledge graph augmented with embeddings, using an Extract–Cognify–Load (ECL) pipeline to ingest and semantically relate data before querying it  ￼. Mem0, by contrast, offers a vector-only, multi-level memory API (user/session/agent state) tuned for personalized, self-improving interactions  ￼. Both systems expose simple Pythonic APIs—Cognee via asynchronous cognee.add(), cognee.cognify(), cognee.search() calls  ￼, and Mem0 via a Memory class with .search() and .add() methods  ￼—but they make different trade-offs between semantic richness (graphs + vectors) and developer simplicity (vectors only).
-
-Both libraries rely on an OpenAI-compatible LLM client under the hood, so you can point them at a locally served vLLM instance. vLLM can be run as an HTTP server implementing the OpenAI Completions/Chat API (default at http://localhost:8000)  ￼, and it fully supports the Python openai client  ￼. By setting the standard environment variable OPENAI_API_BASE, both Cognee and Mem0 will transparently send their generation and embedding requests to your vLLM server instead of OpenAI’s cloud.
-
-⸻
-
-1. Main Architectural Differences
-
-1.1 Data Model
-	•	Cognee
-Uses an RDF-style knowledge graph plus vector indices, letting you define rich ontologies and query across relationships as well as semantic similarity  ￼.
-	•	Mem0
-Employs a pure vector store layered into user, session, and agent memories, focusing on efficient retrieval and automatic summary generation over time  ￼.
-
-1.2 Ingestion Pipeline vs. One-Shot API
-	•	Cognee’s ECL pipeline
-	1.	Extract raw text/documents
-	2.	Cognify into nodes/triples + embeddings
-	3.	Load into graph + vector databases  ￼
-	•	Mem0’s direct API
-Single-step .add() calls that both index new content and update summaries under the hood  ￼.
-
-1.3 Query Semantics
-	•	Cognee
-Graph-powered queries (e.g., SPARQL-like patterns) combined with vector similarity searches.
-	•	Mem0
-Pure vector similarity search with optional context summaries and “chain of thought” style prompts.
-
-⸻
-
-2. Integrating with a Local vLLM Server
-
-Both Cognee and Mem0 default to using the OpenAI Python client. To redirect calls to your vLLM server:
-	1.	Start vLLM in OpenAI-compatible mode (default host & port shown):
-
-vllm serve MyModelName
-# ➜ serves at http://localhost:8000 by default
-
-￼
-
-	2.	Set environment variables so that openai library uses your local endpoint:
-
-export OPENAI_API_BASE="http://localhost:8000/v1"
-export OPENAI_API_KEY="any-string"   # vLLM doesn’t enforce a real key
-
-￼
-
-	3.	Verify with a quick Python test:
-
-from openai import OpenAI
-client = OpenAI()  # uses OPENAI_API_BASE by default
-resp = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role":"user","content":"Hello"}]
-)
-print(resp.choices[0].message.content)
-
-
-
-⸻
-
-3. Code Snippets
-
-3.1 Cognee + vLLM
-
-import os, asyncio
 import cognee
-
-# Point Cognee’s LLM calls at vLLM
-os.environ["OPENAI_API_BASE"] = "http://localhost:8000/v1"
-os.environ["LLM_API_KEY"] = "unused"
+import asyncio
 
 async def main():
-    # Ingest a document
-    await cognee.add("AI memory engines connect graphs and vectors.")
-    # Build graph + embeddings
+    # Configure LLM (your local vLLM)
+    cognee.config.llm_provider = "custom"
+    cognee.config.llm_model = "your-model-name"
+    cognee.config.llm_endpoint = "http://localhost:8000/v1"
+    cognee.config.llm_api_key = "EMPTY"
+    
+    # Configure embeddings (also your local vLLM)
+    cognee.config.embedding_provider = "custom"
+    cognee.config.embedding_model = "your-embedding-model-name"
+    cognee.config.embedding_endpoint = "http://localhost:8000/v1/embeddings"
+    cognee.config.embedding_api_key = "EMPTY"
+    cognee.config.embedding_dimensions = 1536  # Adjust for your model
+    
+    # Your cognee workflow
+    await cognee.add("Your text data here")
     await cognee.cognify()
-    # Query your memory
-    results = await cognee.search("What powers Cognee memory?")
-    for r in results:
-        print("Result:", r)
+    results = await cognee.search("Your query here")
+    
+    for result in results:
+        print(result)
 
-if __name__ == "__main__":
-    asyncio.run(main())
-
-Here, Cognee will use the OpenAI client pointed at your local vLLM server to generate embeddings and any needed LLM calls  ￼.
-
-3.2 Mem0 + vLLM
-
-import os
-from openai import OpenAI
-from mem0 import Memory
-
-# Redirect Mem0’s OpenAI client to vLLM
-os.environ["OPENAI_API_BASE"] = "http://localhost:8000/v1"
-os.environ["OPENAI_API_KEY"] = "unused"
-
-# Instantiate clients
-openai_client = OpenAI()
-memory = Memory()
-
-def chat_with_memory(msg: str, user_id: str = "user1") -> str:
-    # Retrieve top-k relevant memories
-    hits = memory.search(query=msg, user_id=user_id, limit=3)["results"]
-    ctx = "\n".join(f"- {h['memory']}" for h in hits)
-    prompt = f"You are an AI. Use memory:\n{ctx}\nQuestion: {msg}"
-    resp = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"system","content":prompt}]
-    )
-    answer = resp.choices[0].message.content
-    # Record the new turn in memory
-    memory.add([{"role":"user","content":msg},{"role":"assistant","content":answer}], user_id=user_id)
-    return answer
-
-# Simple REPL
-if __name__ == "__main__":
-    print("Type 'exit' to quit")
-    while True:
-        u = input("You: ")
-        if u.lower() == "exit":
-            break
-        print("AI:", chat_with_memory(u))
-
-Mem0 will similarly route all its generation and embedding calls through the vLLM server  ￼.
-
-⸻
-
-By choosing Cognee you gain rich, ontology-driven graph memory; with Mem0 you get a lightweight, vector-only memory layer optimized for fast personalization. In both cases, running your own vLLM server makes the setup fully self-hosted and cost-effective.
+asyncio.run(main())
