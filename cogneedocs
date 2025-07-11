@@ -1,15 +1,19 @@
 """
 Knowledge Graph + Embeddings with VLLM
-Uses OpenAILike to bypass LlamaIndex's model name validation for custom models.
+Uses OpenAILike for LLM and OpenAILikeEmbedding for embeddings to bypass model name validation.
 """
 
 from llama_index.core import Document, KnowledgeGraphIndex, Settings
 from llama_index.llms.openai_like import OpenAILike
-from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 
 class KnowledgeGraphSystem:
-    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.1"):
-        # Configure VLLM endpoints with custom model name
+    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.1", embedding_model_name=None):
+        # Use same model for embeddings if not specified
+        if embedding_model_name is None:
+            embedding_model_name = model_name
+            
+        # Configure VLLM LLM with custom model name
         self.llm = OpenAILike(
             model=model_name,  # Use any model name from VLLM
             api_base="http://localhost:8000/v1",
@@ -19,10 +23,12 @@ class KnowledgeGraphSystem:
             context_window=4096
         )
         
-        self.embedding = OpenAIEmbedding(
-            model=model_name,  # Use same model name
+        # Configure VLLM embeddings with custom model name
+        self.embedding = OpenAILikeEmbedding(
+            model_name=embedding_model_name,  # Can be different from LLM model
             api_base="http://localhost:8000/v1", 
-            api_key="fake-key"
+            api_key="fake-key",
+            embed_batch_size=10
         )
         
         # Set global settings
@@ -61,8 +67,15 @@ class KnowledgeGraphSystem:
         response = query_engine.query(question)
         return str(response)
 
-# Usage - specify your VLLM model name
+# Usage - specify your VLLM model name(s)
+# Same model for both LLM and embeddings:
 kg = KnowledgeGraphSystem(model_name="mistralai/Mistral-7B-Instruct-v0.1")
+
+# Or use different models for LLM vs embeddings:
+# kg = KnowledgeGraphSystem(
+#     model_name="mistralai/Mistral-7B-Instruct-v0.1",  # For text generation
+#     embedding_model_name="BAAI/bge-large-en-v1.5"     # For embeddings
+# )
 
 # Ingest your data
 text = """
@@ -80,4 +93,4 @@ print(kg.query("Who founded Tesla?"))
 print(kg.query("Tell me about Elon Musk's companies"))
 
 # Install required packages:
-# pip install llama-index llama-index-llms-openai-like llama-index-embeddings-openai
+# pip install llama-index llama-index-llms-openai-like llama-index-embeddings-openai-like
