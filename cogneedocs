@@ -1,33 +1,46 @@
 import os
+import cognee
+import asyncio
 
-# Set all environment variables BEFORE importing cognee
+# Disable telemetry before importing/using cognee
 os.environ["DO_NOT_TRACK"] = "1"
 os.environ["TELEMETRY_DISABLED"] = "1"
 os.environ["ANALYTICS_DISABLED"] = "1"
 os.environ["NO_ANALYTICS"] = "1"
 
-# Set cognee configuration via environment variables
-os.environ["LLM_PROVIDER"] = "custom"
-os.environ["LLM_MODEL"] = "your-actual-model-name"
-os.environ["LLM_ENDPOINT"] = "http://localhost:8000/v1"
-os.environ["LLM_API_KEY"] = "sk-dummy-local-vllm-key-12345"
-
-os.environ["EMBEDDING_PROVIDER"] = "custom"
-os.environ["EMBEDDING_MODEL"] = "your-actual-embedding-model-name"
-os.environ["EMBEDDING_ENDPOINT"] = "http://localhost:8000/v1/embeddings"
-os.environ["EMBEDDING_API_KEY"] = "sk-dummy-embedding-key-67890"
-os.environ["EMBEDDING_DIMENSIONS"] = "1536"
-
-# NOW import cognee
-import cognee
-import asyncio
+# Set vLLM environment variables (required for LiteLLM)
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000/v1"
+os.environ["HOSTED_VLLM_API_KEY"] = "sk-dummy-api-key-for-local-vllm-12345"  # Optional but good practice
 
 async def main():
-    await cognee.add("Natural language processing is a subfield of computer science.")
-    await cognee.cognify()
-    results = await cognee.search("What is NLP?")
+    # Configure cognee to use your local vLLM - KEY FIXES:
+    # 1. Use "hosted_vllm" instead of "custom"
+    # 2. Use "hosted_vllm/your-model-name" format for model
+    # 3. Set api_base correctly
     
-    for result in results:
-        print(result)
+    cognee.config.llm_provider = "hosted_vllm"
+    cognee.config.llm_model = "hosted_vllm/your-actual-model-name"  # Replace with your model (e.g., "hosted_vllm/mistral-7b-instruct")
+    cognee.config.llm_endpoint = "http://localhost:8000/v1"
+    cognee.config.llm_api_key = "sk-dummy-api-key-for-local-vllm-12345"  # Dummy but valid-looking key
+    
+    # Configure embeddings - if your vLLM supports embeddings
+    cognee.config.embedding_provider = "hosted_vllm"
+    cognee.config.embedding_model = "hosted_vllm/your-actual-embedding-model-name"  # Replace with your embedding model
+    cognee.config.embedding_endpoint = "http://localhost:8000/v1/embeddings"
+    cognee.config.embedding_api_key = "sk-dummy-embedding-key-for-local-vllm-67890"  # Dummy but valid-looking key
+    cognee.config.embedding_dimensions = 1536  # Adjust based on your embedding model
+    
+    try:
+        # Your cognee workflow
+        await cognee.add("Natural language processing is a subfield of computer science.")
+        await cognee.cognify()
+        results = await cognee.search("What is NLP?")
+        
+        for result in results:
+            print(result)
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Make sure your vLLM server is running on http://localhost:8000")
 
 asyncio.run(main())
