@@ -1,17 +1,26 @@
+"""
+Knowledge Graph + Embeddings with VLLM
+Uses OpenAILike to bypass LlamaIndex's model name validation for custom models.
+"""
+
 from llama_index.core import Document, KnowledgeGraphIndex, Settings
-from llama_index.llms.openai import OpenAI
+from llama_index.llms.openai_like import OpenAILike
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 class KnowledgeGraphSystem:
-    def __init__(self):
-        # Configure VLLM endpoints
-        self.llm = OpenAI(
+    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.1"):
+        # Configure VLLM endpoints with custom model name
+        self.llm = OpenAILike(
+            model=model_name,  # Use any model name from VLLM
             api_base="http://localhost:8000/v1",
             api_key="fake-key",  # VLLM doesn't need real key
-            temperature=0
+            temperature=0,
+            is_chat_model=True,
+            context_window=4096
         )
         
         self.embedding = OpenAIEmbedding(
+            model=model_name,  # Use same model name
             api_base="http://localhost:8000/v1", 
             api_key="fake-key"
         )
@@ -52,8 +61,8 @@ class KnowledgeGraphSystem:
         response = query_engine.query(question)
         return str(response)
 
-# Usage
-kg = KnowledgeGraphSystem()
+# Usage - specify your VLLM model name
+kg = KnowledgeGraphSystem(model_name="mistralai/Mistral-7B-Instruct-v0.1")
 
 # Ingest your data
 text = """
@@ -70,5 +79,5 @@ print(kg.query("What does Tesla produce?"))
 print(kg.query("Who founded Tesla?"))
 print(kg.query("Tell me about Elon Musk's companies"))
 
-
-pip install llama-index llama-index-llms-openai llama-index-embeddings-openai
+# Install required packages:
+# pip install llama-index llama-index-llms-openai-like llama-index-embeddings-openai
