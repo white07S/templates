@@ -1,0 +1,71 @@
+import asyncio
+from langchain.chat_models import AzureChatOpenAI  # LangChain chat wrapper  [oai_citation:6‡LangChain](https://python.langchain.com/docs/integrations/chat/azure_chat_openai/?utm_source=chatgpt.com)
+from langchain_openai import AzureOpenAIEmbeddings   # LangChain embeddings wrapper  [oai_citation:7‡LangChain](https://python.langchain.com/docs/integrations/text_embedding/azureopenai/?utm_source=chatgpt.com)
+
+from graphiti_core import Graphiti
+from graphiti_core.llm_client.base import LLMClient      # Graphiti LLM interface  [oai_citation:8‡GitHub](https://github.com/getzep/graphiti)
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.embedder.base import Embedder         # Graphiti embedder interface  [oai_citation:9‡GitHub](https://github.com/getzep/graphiti)
+from graphiti_core.cross_encoder.base import CrossEncoderClient
+
+# ── 1) Create LangChain clients ─────────────────────────────────────────────────
+lc_chat = AzureChatOpenAI(
+    temperature=0,
+    # AzureChatOpenAI reads its API key + endpoint from env vars
+)
+lc_embed = AzureOpenAIEmbeddings(
+    model="text-embedding-3-large"
+)
+
+# ── 2) Adapter classes ───────────────────────────────────────────────────────────
+class LangChainLLMClient(LLMClient):
+    def __init__(self, lc_model: AzureChatOpenAI, config: LLMConfig):
+        self.lc_model = lc_model
+        self.config = config
+
+    async def chat_complete(self, prompt: str, **kwargs) -> str:
+        # LangChain’s async generate API
+        result = await self.lc_model.agenerate([{"role": "user", "content": prompt}])
+        # Extract text from the first generation  [oai_citation:10‡LangChain](https://python.langchain.com/docs/integrations/chat/azure_chat_openai/?utm_source=chatgpt.com)
+        return result.generations[0][0].text
+
+class LangChainEmbedder(Embedder):
+    def __init__(self, lc_embedder: AzureOpenAIEmbeddings):
+        self.lc_embedder = lc_embedder
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        # LangChain’s sync embedding API under the hood  [oai_citation:11‡LangChain](https://python.langchain.com/docs/integrations/text_embedding/azureopenai/?utm_source=chatgpt.com)
+        return self.lc_embedder.embed_documents(texts)
+
+# ── 3) Initialize Graphiti with adapters ─────────────────────────────────────────
+async def main():
+    graphiti = Graphiti(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="neo4j",
+        llm_client=LangChainLLMClient(
+            lc_model=lc_chat,
+            config=LLMConfig(small_model="gpt-35-turbo", model="gpt-35-turbo")
+        ),
+        embedder=LangChainEmbedder(lc_embed),
+        cross_encoder=LangChainLLMClient(  # reuse simple reranker via chat
+            lc_model=lc_chat,
+            config=LLMConfig(model="gpt-35-turbo")
+        )
+    )
+
+    # ── 4) Sanity check ───────────────────────────────────────────────────────────
+    episode = graphiti.create_episode(
+        group_name="test_group",
+        data="Testing adapters with LangChain wrappers."
+    )
+    print("Episode created:", episode)
+
+    hits = graphiti.search(
+        recipe="semantic_node_search",
+        recipe_kwargs={"node_label": None, "query": "Testing adapters"}
+    )
+    print("Search hits:", hits)
+
+if __name__ == "__main__":
+    asyncio.run(main())
