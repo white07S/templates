@@ -1,0 +1,459 @@
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.colors import black, blue, red, magenta, pink, green
+from reportlab.lib.units import inch
+
+def create_editable_pdf_form(filename="editable_form.pdf"):
+    """
+    Creates an editable PDF form with various form fields that users can edit in Adobe Reader
+    """
+    
+    # Create a canvas with letter size
+    c = canvas.Canvas(filename, pagesize=letter)
+    width, height = letter
+    
+    # Set up some basic styling
+    c.setTitle("Editable PDF Form")
+    c.setAuthor("Python PDF Generator")
+    c.setSubject("Sample Editable Form")
+    
+    # Title
+    c.setFont("Helvetica-Bold", 24)
+    c.setFillColor(blue)
+    c.drawCentredString(width/2, height - 50, "EDITABLE PDF FORM")
+    
+    # Subtitle
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawCentredString(width/2, height - 80, "Fill out this form and save your changes in Adobe Reader")
+    
+    # Section 1: Personal Information
+    y_position = height - 120
+    
+    c.setFont("Helvetica-Bold", 16)
+    c.setFillColor(red)
+    c.drawString(50, y_position, "Section 1: Personal Information")
+    y_position -= 30
+    
+    # Name field
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_position, "Full Name:")
+    c.acroForm.textfield(name='full_name',
+                        tooltip='Enter your full name',
+                        x=150, y=y_position-5,
+                        borderStyle='solid',
+                        width=300, height=20,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=12,
+                        maxlen=100)
+    y_position -= 40
+    
+    # Email field
+    c.drawString(50, y_position, "Email Address:")
+    c.acroForm.textfield(name='email',
+                        tooltip='Enter your email address',
+                        x=150, y=y_position-5,
+                        borderStyle='solid',
+                        width=300, height=20,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=12,
+                        maxlen=100)
+    y_position -= 40
+    
+    # Phone field
+    c.drawString(50, y_position, "Phone Number:")
+    c.acroForm.textfield(name='phone',
+                        tooltip='Enter your phone number',
+                        x=150, y=y_position-5,
+                        borderStyle='solid',
+                        width=200, height=20,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=12,
+                        maxlen=20)
+    y_position -= 60
+    
+    # Section 2: Preferences
+    c.setFont("Helvetica-Bold", 16)
+    c.setFillColor(red)
+    c.drawString(50, y_position, "Section 2: Preferences & Choices")
+    y_position -= 30
+    
+    # Checkbox options
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_position, "Select your interests (check all that apply):")
+    y_position -= 25
+    
+    # Checkboxes
+    interests = [
+        ("technology", "Technology & Programming"),
+        ("sports", "Sports & Fitness"),
+        ("music", "Music & Entertainment"),
+        ("travel", "Travel & Adventure"),
+        ("cooking", "Cooking & Food")
+    ]
+    
+    for i, (value, label) in enumerate(interests):
+        checkbox_y = y_position - (i * 25)
+        c.acroForm.checkbox(name=f'interest_{value}',
+                           tooltip=f'Check if you like {label}',
+                           x=70, y=checkbox_y,
+                           buttonStyle='check',
+                           borderColor=black,
+                           fillColor=None,
+                           textColor=black,
+                           forceBorder=True,
+                           size=12)
+        c.drawString(90, checkbox_y + 2, label)
+    
+    y_position -= 150
+    
+    # Section 3: Comments
+    c.setFont("Helvetica-Bold", 16)
+    c.setFillColor(red)
+    c.drawString(50, y_position, "Section 3: Additional Comments")
+    y_position -= 30
+    
+    # Multi-line text area
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_position, "Please share any additional comments or feedback:")
+    y_position -= 25
+    
+    c.acroForm.textfield(name='comments',
+                        tooltip='Enter your comments here',
+                        x=50, y=y_position-100,
+                        borderStyle='solid',
+                        width=500, height=100,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=10,
+                        maxlen=1000)
+    
+    # Add some static content
+    y_position -= 130
+    
+    c.setFont("Helvetica-Oblique", 10)
+    c.setFillColor(blue)
+    c.drawString(50, y_position, "Instructions:")
+    y_position -= 15
+    c.drawString(50, y_position, "• Fill out all fields completely")
+    y_position -= 12
+    c.drawString(50, y_position, "• Save the PDF after making changes")
+    y_position -= 12
+    c.drawString(50, y_position, "• This form can be edited in Adobe Reader or similar PDF viewers")
+    y_position -= 12
+    c.drawString(50, y_position, "• All form data will be preserved when you save the document")
+    
+    # Contact method using radio buttons instead of dropdown (to avoid choice bug)
+    y_position -= 40
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_position, "Preferred Contact Method:")
+    y_position -= 20
+    
+    contact_methods = [
+        ("email", "Email"),
+        ("phone", "Phone"),
+        ("mail", "Postal Mail"),
+        ("none", "No Contact")
+    ]
+    
+    for i, (value, label) in enumerate(contact_methods):
+        radio_x = 70 + (i * 100)
+        c.acroForm.radio(name='contact_method',
+                        tooltip=f'Select {label}',
+                        value=value,
+                        x=radio_x, y=y_position,
+                        buttonStyle='circle',
+                        borderColor=black,
+                        fillColor=None,
+                        textColor=black,
+                        forceBorder=True,
+                        size=12)
+        c.drawString(radio_x + 20, y_position + 2, label)
+    
+    y_position -= 40
+    
+    # Add signature field
+    c.drawString(50, y_position, "Digital Signature:")
+    c.acroForm.textfield(name='signature',
+                        tooltip='Type your name as digital signature',
+                        x=160, y=y_position-5,
+                        borderStyle='solid',
+                        width=200, height=20,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=12,
+                        maxlen=50)
+    
+    # Add date field
+    c.drawString(380, y_position, "Date:")
+    c.acroForm.textfield(name='date',
+                        tooltip='Enter date (MM/DD/YYYY)',
+                        x=420, y=y_position-5,
+                        borderStyle='solid',
+                        width=100, height=20,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=12,
+                        maxlen=10)
+    
+    # Footer
+    c.setFont("Helvetica", 8)
+    c.setFillColor(black)
+    c.drawCentredString(width/2, 30, "This is a sample editable PDF form created with Python and ReportLab")
+    
+    # Save the PDF
+    c.save()
+    print(f"Editable PDF form created successfully: {filename}")
+    print("You can now open this PDF in Adobe Reader and edit the form fields!")
+
+def create_advanced_editable_pdf(filename="advanced_form.pdf"):
+    """
+    Creates a more advanced editable PDF with additional features
+    """
+    
+    c = canvas.Canvas(filename, pagesize=A4)
+    width, height = A4
+    
+    # Header
+    c.setFont("Helvetica-Bold", 20)
+    c.setFillColor(blue)
+    c.drawCentredString(width/2, height - 50, "ADVANCED EDITABLE FORM")
+    
+    # Create a table-like structure with form fields
+    y_start = height - 100
+    
+    # Employee Information Table
+    c.setFont("Helvetica-Bold", 14)
+    c.setFillColor(red)
+    c.drawString(50, y_start, "Employee Information")
+    
+    # Table headers and fields
+    fields = [
+        ("Employee ID:", "emp_id", 100),
+        ("Department:", "department", 150),
+        ("Start Date:", "start_date", 100),
+        ("Salary:", "salary", 100),
+        ("Manager:", "manager", 150),
+        ("Office Location:", "office", 150)
+    ]
+    
+    y_pos = y_start - 30
+    row_height = 30
+    
+    for i, (label, field_name, field_width) in enumerate(fields):
+        if i % 2 == 0:  # Left column
+            x_label = 50
+            x_field = 150
+        else:  # Right column
+            x_label = 300
+            x_field = 400
+            
+        current_y = y_pos - (i // 2) * row_height
+        
+        c.setFont("Helvetica", 10)
+        c.setFillColor(black)
+        c.drawString(x_label, current_y, label)
+        
+        c.acroForm.textfield(name=field_name,
+                            tooltip=f'Enter {label.lower()}',
+                            x=x_field, y=current_y-5,
+                            borderStyle='solid',
+                            width=field_width, height=18,
+                            textColor=black,
+                            fillColor=None,
+                            fontSize=10,
+                            maxlen=100)
+    
+    # Rating section with radio buttons
+    y_pos -= 120
+    c.setFont("Helvetica-Bold", 14)
+    c.setFillColor(red)
+    c.drawString(50, y_pos, "Performance Rating")
+    
+    y_pos -= 25
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_pos, "Overall Performance:")
+    
+    ratings = ["Excellent", "Good", "Average", "Needs Improvement"]
+    for i, rating in enumerate(ratings):
+        radio_x = 200 + (i * 100)
+        c.acroForm.radio(name='performance_rating',
+                        tooltip=f'Rate as {rating}',
+                        value=rating.lower(),
+                        x=radio_x, y=y_pos-5,
+                        buttonStyle='circle',
+                        borderColor=black,
+                        fillColor=None,
+                        textColor=black,
+                        forceBorder=True,
+                        size=12)
+        c.drawString(radio_x + 15, y_pos - 2, rating)
+    
+    # Goals section
+    y_pos -= 50
+    c.setFont("Helvetica-Bold", 14)
+    c.setFillColor(red)
+    c.drawString(50, y_pos, "Goals & Objectives")
+    
+    y_pos -= 25
+    c.setFont("Helvetica", 12)
+    c.setFillColor(black)
+    c.drawString(50, y_pos, "List your goals for the next quarter:")
+    
+    y_pos -= 20
+    c.acroForm.textfield(name='goals',
+                        tooltip='Enter your goals and objectives',
+                        x=50, y=y_pos-80,
+                        borderStyle='solid',
+                        width=500, height=80,
+                        textColor=black,
+                        fillColor=None,
+                        fontSize=10,
+                        maxlen=2000)
+    
+    c.save()
+    print(f"Advanced editable PDF form created successfully: {filename}")
+
+def create_simple_form_example():
+    """
+    Creates a simple working example based on the documentation
+    """
+    c = canvas.Canvas('simple_form_example.pdf')
+    c.setFont("Helvetica", 20)
+    c.drawCentredString(300, 700, 'Simple Form Example')
+    
+    c.setFont("Helvetica", 14)
+    
+    # Text field
+    c.drawString(50, 650, 'Name:')
+    c.acroForm.textfield(name='name_field',
+                        tooltip='Enter your name',
+                        x=120, y=645,
+                        width=200, height=20,
+                        borderStyle='solid',
+                        forceBorder=True)
+    
+    # Checkboxes
+    c.drawString(50, 600, 'Pets:')
+    pets = [('dog', 'Dog'), ('cat', 'Cat'), ('bird', 'Bird')]
+    for i, (value, label) in enumerate(pets):
+        y_pos = 580 - (i * 25)
+        c.acroForm.checkbox(name=f'pet_{value}',
+                           tooltip=f'Check if you have a {label}',
+                           x=70, y=y_pos,
+                           buttonStyle='check',
+                           borderColor=black,
+                           fillColor=pink,
+                           textColor=blue,
+                           forceBorder=True,
+                           size=12)
+        c.drawString(90, y_pos + 2, label)
+    
+    # Radio buttons
+    c.drawString(50, 500, 'Favorite Color:')
+    colors = ['Red', 'Blue', 'Green']
+    for i, color in enumerate(colors):
+        x_pos = 150 + (i * 80)
+        c.acroForm.radio(name='favorite_color',
+                        tooltip=f'Select {color}',
+                        value=color.lower(),
+                        x=x_pos, y=495,
+                        buttonStyle='circle',
+                        borderColor=black,
+                        fillColor=None,
+                        textColor=black,
+                        forceBorder=True,
+                        size=12)
+        c.drawString(x_pos + 15, 497, color)
+    
+    # Instead of dropdown choice (which is buggy), use text field for country
+    c.drawString(50, 450, 'Country:')
+    c.acroForm.textfield(name='country',
+                        tooltip='Enter your country',
+                        x=120, y=445,
+                        width=120, height=20,
+                        borderStyle='solid',
+                        forceBorder=True)
+    
+    c.save()
+    print("Simple form example created successfully: simple_form_example.pdf")
+
+def create_working_choice_example():
+    """
+    Creates a working example that tries to work around the choice bug
+    """
+    c = canvas.Canvas('working_choice_example.pdf')
+    c.setFont("Helvetica", 20)
+    c.drawCentredString(300, 700, 'Working Choice Example')
+    
+    c.setFont("Helvetica", 14)
+    
+    # Text field
+    c.drawString(50, 650, 'Name:')
+    c.acroForm.textfield(name='name_field',
+                        tooltip='Enter your name',
+                        x=120, y=645,
+                        width=200, height=20,
+                        borderStyle='solid',
+                        forceBorder=True)
+    
+    # Try a minimal choice field to test if we can work around the bug
+    try:
+        c.drawString(50, 600, 'Choose Option:')
+        c.acroForm.choice(name='test_choice',
+                         tooltip='Select an option',
+                         value='option1',  # Always provide a value
+                         x=150, y=595,
+                         width=100, height=20,
+                         borderStyle='solid',
+                         forceBorder=True,
+                         options=[
+                             ('option1', 'Option 1'),
+                             ('option2', 'Option 2'),
+                             ('option3', 'Option 3')
+                         ])
+        print("Choice field created successfully!")
+    except Exception as e:
+        print(f"Choice field failed: {e}")
+        # Fallback to text field
+        c.drawString(50, 600, 'Enter Option:')
+        c.acroForm.textfield(name='manual_choice',
+                            tooltip='Enter your choice manually',
+                            x=150, y=595,
+                            width=100, height=20,
+                            borderStyle='solid',
+                            forceBorder=True)
+    
+    c.save()
+    print("Working choice example created successfully: working_choice_example.pdf")
+
+if __name__ == "__main__":
+    # Create the basic editable form (without choice fields)
+    create_editable_pdf_form("basic_editable_form.pdf")
+    
+    # Create the advanced editable form
+    create_advanced_editable_pdf("advanced_editable_form.pdf")
+    
+    # Create a simple working example
+    create_simple_form_example()
+    
+    # Try to create a working choice example
+    create_working_choice_example()
+    
+    print("\nAll PDF forms have been created!")
+    print("Features included:")
+    print("- Text input fields")
+    print("- Checkboxes")
+    print("- Radio buttons")
+    print("- Multi-line text areas")
+    print("- All fields are editable in Adobe Reader")
+    print("\nNote: Dropdown choice fields are avoided due to a bug in ReportLab 4.4.2")
+    print("Radio buttons are used instead for multiple choice options")
