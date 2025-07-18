@@ -1,0 +1,408 @@
+"""
+Complete Graphiti Custom Edge Testing Example
+
+This example demonstrates how to:
+1. Define custom entity types and edge types
+2. Set up edge type mappings
+3. Add episodes that create custom edges
+4. Search and filter by custom edge types
+5. Validate the results
+
+Requirements:
+- Neo4j database running (default: bolt://localhost:7687)
+- OpenAI API key set in environment
+- Python packages: graphiti, neo4j, openai, pydantic
+"""
+
+import asyncio
+import logging
+import os
+from datetime import datetime
+from typing import Optional, List
+from pydantic import BaseModel, Field
+
+from graphiti import Graphiti
+from graphiti.search import SearchFilters
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Environment variables (set these before running)
+# os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+# os.environ["NEO4J_URI"] = "bolt://localhost:7687"
+# os.environ["NEO4J_USER"] = "neo4j"
+# os.environ["NEO4J_PASSWORD"] = "your-password"
+
+# ============================================================================
+# CUSTOM ENTITY TYPES
+# ============================================================================
+
+class Person(BaseModel):
+    """A person entity with employment details."""
+    name: str = Field(description="Full name of the person")
+    role: Optional[str] = Field(None, description="Job title or role")
+    department: Optional[str] = Field(None, description="Department they work in")
+    hire_date: Optional[str] = Field(None, description="Date they were hired (YYYY-MM-DD format)")
+    seniority_level: Optional[str] = Field(None, description="Seniority level: Junior, Mid, Senior, Lead, Manager, Director")
+    skills: Optional[List[str]] = Field(None, description="List of technical or professional skills")
+
+class Department(BaseModel):
+    """A department or team within an organization."""
+    name: str = Field(description="Name of the department")
+    budget: Optional[float] = Field(None, description="Annual budget in USD")
+    employee_count: Optional[int] = Field(None, description="Number of employees")
+    location: Optional[str] = Field(None, description="Physical location or office")
+    department_type: Optional[str] = Field(None, description="Type: Engineering, Sales, Marketing, HR, Finance, etc.")
+
+class Project(BaseModel):
+    """A project or initiative."""
+    name: str = Field(description="Name of the project")
+    status: Optional[str] = Field(None, description="Project status: Planning, Active, On Hold, Completed, Cancelled")
+    start_date: Optional[str] = Field(None, description="Project start date (YYYY-MM-DD format)")
+    end_date: Optional[str] = Field(None, description="Project end date (YYYY-MM-DD format)")
+    budget: Optional[float] = Field(None, description="Project budget in USD")
+    priority: Optional[str] = Field(None, description="Priority level: Low, Medium, High, Critical")
+
+class Technology(BaseModel):
+    """A technology, tool, or platform."""
+    name: str = Field(description="Name of the technology")
+    category: Optional[str] = Field(None, description="Category: Programming Language, Framework, Database, Cloud Service, etc.")
+    version: Optional[str] = Field(None, description="Version number or release")
+    vendor: Optional[str] = Field(None, description="Company or organization that develops it")
+
+# ============================================================================
+# CUSTOM EDGE TYPES
+# ============================================================================
+
+class Employment(BaseModel):
+    """Employment relationship between a person and department."""
+    start_date: Optional[str] = Field(None, description="Employment start date (YYYY-MM-DD format)")
+    employment_type: Optional[str] = Field(None, description="Full-time, Part-time, Contract, Intern")
+    reporting_structure: Optional[str] = Field(None, description="Direct report, Matrix, Dotted line")
+    performance_rating: Optional[str] = Field(None, description="Latest performance rating")
+
+class ProjectAssignment(BaseModel):
+    """Assignment of a person to a project."""
+    role_in_project: Optional[str] = Field(None, description="Role: Lead, Developer, Designer, QA, Product Manager, etc.")
+    allocation_percentage: Optional[int] = Field(None, description="Percentage of time allocated to this project")
+    start_date: Optional[str] = Field(None, description="Assignment start date")
+    end_date: Optional[str] = Field(None, description="Assignment end date")
+    responsibilities: Optional[List[str]] = Field(None, description="Key responsibilities in this project")
+
+class TechnologyUsage(BaseModel):
+    """Usage of technology in a project or by a person."""
+    proficiency_level: Optional[str] = Field(None, description="Proficiency: Beginner, Intermediate, Advanced, Expert")
+    usage_context: Optional[str] = Field(None, description="How it's used: Primary, Secondary, Learning, Legacy")
+    experience_years: Optional[float] = Field(None, description="Years of experience with this technology")
+
+class Mentorship(BaseModel):
+    """Mentorship relationship between two people."""
+    start_date: Optional[str] = Field(None, description="When mentorship started")
+    focus_areas: Optional[List[str]] = Field(None, description="Areas of focus: Technical, Career, Leadership, etc.")
+    frequency: Optional[str] = Field(None, description="Meeting frequency: Weekly, Bi-weekly, Monthly")
+    relationship_type: Optional[str] = Field(None, description="Formal, Informal, Peer")
+
+class Collaboration(BaseModel):
+    """Collaboration between departments or people."""
+    collaboration_type: Optional[str] = Field(None, description="Type: Cross-functional, Strategic, Operational")
+    frequency: Optional[str] = Field(None, description="How often they collaborate")
+    shared_goals: Optional[List[str]] = Field(None, description="Common objectives or goals")
+
+# ============================================================================
+# EDGE TYPE MAPPING
+# ============================================================================
+
+# Define which edge types can exist between which entity types
+EDGE_TYPE_MAP = {
+    ("Person", "Department"): [Employment],
+    ("Person", "Project"): [ProjectAssignment],
+    ("Person", "Technology"): [TechnologyUsage],
+    ("Person", "Person"): [Mentorship, Collaboration],
+    ("Department", "Project"): [Collaboration],
+    ("Department", "Department"): [Collaboration],
+    ("Project", "Technology"): [TechnologyUsage],
+    # Fallback for any other entity combinations
+    ("Entity", "Entity"): []  # Will use default RELATES_TO
+}
+
+# ============================================================================
+# SAMPLE EPISODES FOR TESTING
+# ============================================================================
+
+SAMPLE_EPISODES = [
+    {
+        "episode_id": "company_setup_1",
+        "content": """
+        Sarah Johnson is the Senior Software Engineer in the Engineering Department. 
+        She was hired on 2022-03-15 as a full-time employee and has expertise in Python, 
+        React, and PostgreSQL. She's currently working as the technical lead on the 
+        Customer Portal Redesign project, allocating 80% of her time to it. The project 
+        started on 2024-01-15 and has a budget of $250,000. Sarah has been mentoring 
+        Alex Chen, a junior developer, on React development since June 2024, meeting weekly.
+        """
+    },
+    {
+        "episode_id": "company_setup_2", 
+        "content": """
+        The Engineering Department has 45 employees with an annual budget of $8.5 million, 
+        located in the Austin office. Alex Chen joined as a Junior Software Engineer on 
+        2023-09-01, working on the Mobile App Optimization project. He's learning React 
+        and has intermediate skills in JavaScript and Node.js. The Mobile App project 
+        uses React Native and Firebase technologies.
+        """
+    },
+    {
+        "episode_id": "company_setup_3",
+        "content": """
+        The Product Department collaborates closely with Engineering on both the Customer 
+        Portal Redesign and Mobile App Optimization projects. Maria Rodriguez from Product 
+        is the Product Manager for the Customer Portal project, working cross-functionally 
+        with Sarah's team. The Engineering and Product departments have strategic 
+        collaboration with shared goals of improving user experience and reducing 
+        development cycle time.
+        """
+    },
+    {
+        "episode_id": "company_setup_4",
+        "content": """
+        David Kim is a Lead Data Engineer in the Engineering Department, hired on 2021-08-20. 
+        He has expert-level proficiency in Python and PostgreSQL, using them as primary 
+        technologies for the past 5 years. David is mentoring both Sarah and Alex on 
+        database optimization techniques, focusing on technical and performance areas. 
+        He allocates 15% of his time to mentoring activities.
+        """
+    }
+]
+
+# ============================================================================
+# MAIN TESTING FUNCTION
+# ============================================================================
+
+async def test_custom_edges():
+    """Test custom edge types in Graphiti."""
+    
+    print("🚀 Starting Graphiti Custom Edge Testing...")
+    
+    # Initialize Graphiti with custom types
+    client = Graphiti(
+        entity_types=[Person, Department, Project, Technology],
+        edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+        edge_type_map=EDGE_TYPE_MAP
+    )
+    
+    try:
+        # Initialize the knowledge graph
+        print("📊 Initializing knowledge graph...")
+        await client.build_indices_and_constraints()
+        
+        # Add episodes to create entities and custom edges
+        print("📝 Adding episodes...")
+        for i, episode in enumerate(SAMPLE_EPISODES, 1):
+            print(f"   Adding episode {i}/{len(SAMPLE_EPISODES)}: {episode['episode_id']}")
+            result = await client.add_episode(
+                name=episode["episode_id"],
+                episode_body=episode["content"],
+                reference_time=datetime.now()
+            )
+            print(f"   ✅ Added episode with {len(result.entities)} entities and {len(result.edges)} edges")
+        
+        print("\n🔍 Testing Custom Edge Searches...")
+        
+        # Test 1: Search for Employment edges
+        print("\n1️⃣ Searching for Employment relationships...")
+        employment_results = await client.search(
+            query="employment relationships and job roles",
+            search_filters=SearchFilters(edge_types=["Employment"])
+        )
+        print(f"   Found {len(employment_results)} employment-related edges:")
+        for edge in employment_results[:3]:  # Show first 3
+            print(f"   📋 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 2: Search for Mentorship edges
+        print("\n2️⃣ Searching for Mentorship relationships...")
+        mentorship_results = await client.search(
+            query="mentorship and coaching relationships",
+            search_filters=SearchFilters(edge_types=["Mentorship"])
+        )
+        print(f"   Found {len(mentorship_results)} mentorship-related edges:")
+        for edge in mentorship_results:
+            print(f"   🎓 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 3: Search for ProjectAssignment edges
+        print("\n3️⃣ Searching for Project Assignment relationships...")
+        project_results = await client.search(
+            query="project assignments and roles",
+            search_filters=SearchFilters(edge_types=["ProjectAssignment"])
+        )
+        print(f"   Found {len(project_results)} project assignment edges:")
+        for edge in project_results:
+            print(f"   💼 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 4: Search for TechnologyUsage edges
+        print("\n4️⃣ Searching for Technology Usage relationships...")
+        tech_results = await client.search(
+            query="technology skills and usage",
+            search_filters=SearchFilters(edge_types=["TechnologyUsage"])
+        )
+        print(f"   Found {len(tech_results)} technology usage edges:")
+        for edge in tech_results:
+            print(f"   🔧 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 5: Search for Collaboration edges
+        print("\n5️⃣ Searching for Collaboration relationships...")
+        collab_results = await client.search(
+            query="collaboration between departments and teams",
+            search_filters=SearchFilters(edge_types=["Collaboration"])
+        )
+        print(f"   Found {len(collab_results)} collaboration edges:")
+        for edge in collab_results:
+            print(f"   🤝 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 6: Search by specific entity types
+        print("\n6️⃣ Searching for Person entities...")
+        person_results = await client.search(
+            query="software engineers and developers",
+            search_filters=SearchFilters(entity_types=["Person"])
+        )
+        print(f"   Found {len(person_results)} person-related edges:")
+        for edge in person_results[:3]:
+            print(f"   👤 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 7: Center node search with custom edge filtering
+        print("\n7️⃣ Center node search for Sarah Johnson with Employment edges...")
+        sarah_results = await client.search(
+            query="Sarah Johnson employment and work relationships",
+            center_node_name="Sarah Johnson",
+            search_filters=SearchFilters(edge_types=["Employment", "ProjectAssignment", "Mentorship"])
+        )
+        print(f"   Found {len(sarah_results)} edges related to Sarah Johnson:")
+        for edge in sarah_results:
+            print(f"   🎯 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+        
+        # Test 8: Get all edges without filtering to compare
+        print("\n8️⃣ All edges (no filtering)...")
+        all_results = await client.search(
+            query="relationships and connections",
+            limit=20
+        )
+        print(f"   Found {len(all_results)} total edges:")
+        
+        # Count edges by type
+        edge_type_counts = {}
+        for edge in all_results:
+            edge_type = getattr(edge, 'edge_type', 'Unknown')
+            edge_type_counts[edge_type] = edge_type_counts.get(edge_type, 0) + 1
+        
+        print("   📊 Edge type distribution:")
+        for edge_type, count in sorted(edge_type_counts.items()):
+            print(f"      {edge_type}: {count}")
+        
+        print("\n✅ Custom edge testing completed successfully!")
+        
+        # Summary
+        print(f"""
+📈 SUMMARY:
+   • Added {len(SAMPLE_EPISODES)} episodes
+   • Employment edges: {len(employment_results)}
+   • Mentorship edges: {len(mentorship_results)}
+   • Project Assignment edges: {len(project_results)}
+   • Technology Usage edges: {len(tech_results)}
+   • Collaboration edges: {len(collab_results)}
+   • Total edges: {len(all_results)}
+        """)
+        
+    except Exception as e:
+        print(f"❌ Error during testing: {e}")
+        raise
+    finally:
+        # Close the client
+        await client.close()
+
+# ============================================================================
+# UTILITY FUNCTIONS FOR FURTHER TESTING
+# ============================================================================
+
+async def test_edge_attributes():
+    """Test extraction of custom edge attributes."""
+    print("\n🔬 Testing Custom Edge Attribute Extraction...")
+    
+    client = Graphiti(
+        entity_types=[Person, Department, Project, Technology],
+        edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+        edge_type_map=EDGE_TYPE_MAP
+    )
+    
+    try:
+        await client.build_indices_and_constraints()
+        
+        # Add a detailed episode with specific attributes
+        detailed_episode = """
+        Jennifer Smith was hired as a Senior Product Manager in the Product Department 
+        on January 15, 2023, as a full-time employee with a performance rating of 'Exceeds Expectations'. 
+        She is assigned to the AI Integration project as the Product Lead, allocating 90% of her time 
+        with responsibilities including requirements gathering, stakeholder management, and roadmap planning. 
+        Jennifer has expert-level proficiency in Figma, which she's been using as her primary design tool 
+        for 4 years. She mentors Tom Wilson weekly on product strategy and user research, 
+        in a formal mentorship program that started in March 2024.
+        """
+        
+        result = await client.add_episode(
+            name="detailed_attributes_test",
+            episode_body=detailed_episode,
+            reference_time=datetime.now()
+        )
+        
+        print(f"✅ Added detailed episode with {len(result.entities)} entities and {len(result.edges)} edges")
+        
+        # Search for edges with detailed attributes
+        detailed_results = await client.search(
+            query="Jennifer Smith employment project assignment mentorship",
+            center_node_name="Jennifer Smith"
+        )
+        
+        print("🔍 Edges with detailed attributes:")
+        for edge in detailed_results:
+            print(f"   📝 {edge.source_name} -> {edge.target_name}")
+            print(f"      Type: {getattr(edge, 'edge_type', 'Unknown')}")
+            print(f"      Fact: {edge.fact}")
+            if hasattr(edge, 'attributes') and edge.attributes:
+                print(f"      Attributes: {edge.attributes}")
+            print()
+            
+    finally:
+        await client.close()
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+if __name__ == "__main__":
+    # Check environment variables
+    required_vars = ["OPENAI_API_KEY"]
+    optional_vars = {
+        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_USER": "neo4j", 
+        "NEO4J_PASSWORD": "password"
+    }
+    
+    print("🔧 Environment Check:")
+    for var in required_vars:
+        if not os.getenv(var):
+            print(f"❌ Missing required environment variable: {var}")
+            print(f"   Please set: export {var}=your_value")
+        else:
+            print(f"✅ {var} is set")
+    
+    for var, default in optional_vars.items():
+        value = os.getenv(var, default)
+        print(f"📝 {var}={value}")
+    
+    print("\n" + "="*60)
+    
+    # Run the main test
+    asyncio.run(test_custom_edges())
+    
+    # Uncomment to test detailed edge attributes
+    # print("\n" + "="*60)
+    # asyncio.run(test_edge_attributes())
