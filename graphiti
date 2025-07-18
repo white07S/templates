@@ -17,6 +17,10 @@ IMPORTANT FORMAT CHANGES FOR 0.17.6:
 PROTECTED ATTRIBUTE NAMES (cannot be used in custom entity types):
 - uuid, name, group_id, labels, created_at, summary, attributes, name_embedding
 
+ENTITYEDGE ATTRIBUTE CHANGES:
+- Use edge.fact (not edge.source_name/edge.target_name)
+- Other attributes: edge.uuid, edge.created_at, edge.edge_type, edge.attributes
+
 Requirements:
 - Neo4j database running (default: bolt://localhost:7687)
 - OpenAI API key set in environment
@@ -252,7 +256,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(employment_results)} employment-related edges:")
         for edge in employment_results[:3]:  # Show first 3
-            print(f"   📋 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   📋 {edge.fact}")
         
         # Test 2: Search for Mentorship edges
         print("\n2️⃣ Searching for Mentorship relationships...")
@@ -262,7 +266,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(mentorship_results)} mentorship-related edges:")
         for edge in mentorship_results:
-            print(f"   🎓 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   🎓 {edge.fact}")
         
         # Test 3: Search for ProjectAssignment edges
         print("\n3️⃣ Searching for Project Assignment relationships...")
@@ -272,7 +276,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(project_results)} project assignment edges:")
         for edge in project_results:
-            print(f"   💼 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   💼 {edge.fact}")
         
         # Test 4: Search for TechnologyUsage edges
         print("\n4️⃣ Searching for Technology Usage relationships...")
@@ -282,7 +286,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(tech_results)} technology usage edges:")
         for edge in tech_results:
-            print(f"   🔧 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   🔧 {edge.fact}")
         
         # Test 5: Search for Collaboration edges
         print("\n5️⃣ Searching for Collaboration relationships...")
@@ -292,7 +296,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(collab_results)} collaboration edges:")
         for edge in collab_results:
-            print(f"   🤝 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   🤝 {edge.fact}")
         
         # Test 6: Search by specific entity types
         print("\n6️⃣ Searching for Person entities...")
@@ -302,7 +306,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(person_results)} person-related edges:")
         for edge in person_results[:3]:
-            print(f"   👤 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   👤 {edge.fact}")
         
         # Test 7: Center node search with custom edge filtering
         print("\n7️⃣ Center node search for Sarah Johnson with Employment edges...")
@@ -313,7 +317,7 @@ async def test_custom_edges():
         )
         print(f"   Found {len(sarah_results)} edges related to Sarah Johnson:")
         for edge in sarah_results:
-            print(f"   🎯 {edge.source_name} -> {edge.target_name}: {edge.fact}")
+            print(f"   🎯 {edge.fact}")
         
         # Test 8: Get all edges without filtering to compare
         print("\n8️⃣ All edges (no filtering)...")
@@ -323,9 +327,22 @@ async def test_custom_edges():
         )
         print(f"   Found {len(all_results)} total edges:")
         
-        # Count edges by type
+        # Count edges by type and show detailed info
         edge_type_counts = {}
-        for edge in all_results:
+        print("   📊 Sample edges with details:")
+        for i, edge in enumerate(all_results[:5]):  # Show first 5 with details
+            edge_type = getattr(edge, 'edge_type', 'Unknown')
+            edge_type_counts[edge_type] = edge_type_counts.get(edge_type, 0) + 1
+            print(f"      {i+1}. {edge.fact}")
+            print(f"         Type: {edge_type}")
+            if hasattr(edge, 'uuid'):
+                print(f"         UUID: {edge.uuid}")
+            if hasattr(edge, 'created_at'):
+                print(f"         Created: {edge.created_at}")
+            print()
+        
+        # Count remaining edges
+        for edge in all_results[5:]:
             edge_type = getattr(edge, 'edge_type', 'Unknown')
             edge_type_counts[edge_type] = edge_type_counts.get(edge_type, 0) + 1
         
@@ -357,6 +374,21 @@ async def test_custom_edges():
 # ============================================================================
 # UTILITY FUNCTIONS FOR FURTHER TESTING
 # ============================================================================
+
+def debug_edge_attributes(edge, title="Edge Debug"):
+    """Debug helper to see all available attributes on an EntityEdge object."""
+    print(f"\n🔍 {title}:")
+    print(f"   Object type: {type(edge).__name__}")
+    print(f"   Available attributes:")
+    for attr in dir(edge):
+        if not attr.startswith('_'):  # Skip private/magic methods
+            try:
+                value = getattr(edge, attr)
+                if not callable(value):  # Skip methods
+                    print(f"      {attr}: {value}")
+            except Exception as e:
+                print(f"      {attr}: <Error accessing: {e}>")
+    print()
 
 async def test_edge_attributes():
     """Test extraction of custom edge attributes."""
@@ -411,13 +443,17 @@ async def test_edge_attributes():
         )
         
         print("🔍 Edges with detailed attributes:")
-        for edge in detailed_results:
-            print(f"   📝 {edge.source_name} -> {edge.target_name}")
-            print(f"      Type: {getattr(edge, 'edge_type', 'Unknown')}")
-            print(f"      Fact: {edge.fact}")
+        for i, edge in enumerate(detailed_results[:3]):  # Show first 3 with full debug
+            debug_edge_attributes(edge, f"Edge {i+1}")
+            print(f"   📝 Fact: {edge.fact}")
+            print(f"   🏷️  Type: {getattr(edge, 'edge_type', 'Unknown')}")
+            if hasattr(edge, 'uuid'):
+                print(f"   🆔 UUID: {edge.uuid}")
+            if hasattr(edge, 'created_at') and edge.created_at:
+                print(f"   📅 Created: {edge.created_at}")
             if hasattr(edge, 'attributes') and edge.attributes:
-                print(f"      Attributes: {edge.attributes}")
-            print()
+                print(f"   ⚙️  Custom Attributes: {edge.attributes}")
+            print("-" * 50)
             
     finally:
         await client.close()
@@ -460,6 +496,6 @@ if __name__ == "__main__":
     # Run the main test
     asyncio.run(test_custom_edges())
     
-    # Uncomment to test detailed edge attributes
-    # print("\n" + "="*60)
-    # asyncio.run(test_edge_attributes())
+    # Enable detailed edge attributes testing to see what's available
+    print("\n" + "="*60)
+    asyncio.run(test_edge_attributes())
