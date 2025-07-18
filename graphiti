@@ -3,10 +3,15 @@ Complete Graphiti Custom Edge Testing Example - CORRECTED FOR 0.17.6
 
 This example demonstrates how to:
 1. Define custom entity types and edge types
-2. Set up edge type mappings
+2. Set up edge type mappings  
 3. Add episodes with custom types using add_episode method
 4. Search and filter by custom edge types
 5. Validate the results
+
+IMPORTANT FORMAT CHANGES FOR 0.17.6:
+- entity_types: dict[str, BaseModel] (not list)
+- edge_types: dict[str, BaseModel] (not list) 
+- edge_type_map values: list[str] (class names as strings, not classes)
 
 Requirements:
 - Neo4j database running (default: bolt://localhost:7687)
@@ -114,14 +119,16 @@ class Collaboration(BaseModel):
 # ============================================================================
 
 # Define which edge types can exist between which entity types
+# IMPORTANT: Values should be lists of CLASS NAMES (strings), not the actual classes
+# Format: dict[tuple[str, str], list[str]]
 EDGE_TYPE_MAP = {
-    ("Person", "Department"): [Employment],
-    ("Person", "Project"): [ProjectAssignment],
-    ("Person", "Technology"): [TechnologyUsage],
-    ("Person", "Person"): [Mentorship, Collaboration],
-    ("Department", "Project"): [Collaboration],
-    ("Department", "Department"): [Collaboration],
-    ("Project", "Technology"): [TechnologyUsage],
+    ("Person", "Department"): ["Employment"],
+    ("Person", "Project"): ["ProjectAssignment"],
+    ("Person", "Technology"): ["TechnologyUsage"],
+    ("Person", "Person"): ["Mentorship", "Collaboration"],
+    ("Department", "Project"): ["Collaboration"],
+    ("Department", "Department"): ["Collaboration"],
+    ("Project", "Technology"): ["TechnologyUsage"],
     # Fallback for any other entity combinations
     ("Entity", "Entity"): []  # Will use default RELATES_TO
 }
@@ -202,14 +209,27 @@ async def test_custom_edges():
         for i, episode in enumerate(SAMPLE_EPISODES, 1):
             print(f"   Adding episode {i}/{len(SAMPLE_EPISODES)}: {episode['episode_id']}")
             
-            # CORRECTED: Pass custom types to add_episode method
+            # CORRECTED: Pass custom types to add_episode method as DICTIONARIES
             result = await client.add_episode(
                 name=episode["episode_id"],
                 episode_body=episode["content"],
+                source_description="Test company data for custom edge type demonstration",
                 reference_time=datetime.now(),
-                # Custom types are passed here, not to constructor
-                entity_types=[Person, Department, Project, Technology],
-                edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+                # IMPORTANT: entity_types and edge_types must be dictionaries
+                # Format: {"ClassName": ClassObject}
+                entity_types={
+                    "Person": Person,
+                    "Department": Department, 
+                    "Project": Project,
+                    "Technology": Technology
+                },
+                edge_types={
+                    "Employment": Employment,
+                    "ProjectAssignment": ProjectAssignment,
+                    "TechnologyUsage": TechnologyUsage,
+                    "Mentorship": Mentorship,
+                    "Collaboration": Collaboration
+                },
                 edge_type_map=EDGE_TYPE_MAP
             )
             print(f"   ✅ Added episode with {len(result.nodes)} entities and {len(result.edges)} edges")
@@ -357,9 +377,21 @@ async def test_edge_attributes():
         result = await client.add_episode(
             name="detailed_attributes_test",
             episode_body=detailed_episode,
+            source_description="Detailed test episode for custom edge attributes",
             reference_time=datetime.now(),
-            entity_types=[Person, Department, Project, Technology],
-            edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+            entity_types={
+                "Person": Person,
+                "Department": Department, 
+                "Project": Project,
+                "Technology": Technology
+            },
+            edge_types={
+                "Employment": Employment,
+                "ProjectAssignment": ProjectAssignment,
+                "TechnologyUsage": TechnologyUsage,
+                "Mentorship": Mentorship,
+                "Collaboration": Collaboration
+            },
             edge_type_map=EDGE_TYPE_MAP
         )
         
@@ -408,6 +440,12 @@ if __name__ == "__main__":
         print(f"📝 {var}={value}")
     
     print("\n" + "="*60)
+    print("📚 KEY CHANGES FOR GRAPHITI 0.17.6:")
+    print("• entity_types: dict[str, BaseModel] (NOT list)")
+    print("• edge_types: dict[str, BaseModel] (NOT list)")
+    print("• edge_type_map values: list[str] (class names as strings)")
+    print("• Custom types passed to add_episode(), NOT constructor")
+    print("=" * 60)
     
     # Run the main test
     asyncio.run(test_custom_edges())
