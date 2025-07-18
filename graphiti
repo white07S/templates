@@ -12,6 +12,10 @@ IMPORTANT FORMAT CHANGES FOR 0.17.6:
 - entity_types: dict[str, BaseModel] (not list)
 - edge_types: dict[str, BaseModel] (not list) 
 - edge_type_map values: list[str] (class names as strings, not classes)
+- Custom types passed to add_episode(), NOT constructor
+
+PROTECTED ATTRIBUTE NAMES (cannot be used in custom entity types):
+- uuid, name, group_id, labels, created_at, summary, attributes, name_embedding
 
 Requirements:
 - Neo4j database running (default: bolt://localhost:7687)
@@ -43,9 +47,13 @@ logger = logging.getLogger(__name__)
 # CUSTOM ENTITY TYPES
 # ============================================================================
 
+# IMPORTANT: Avoid these PROTECTED attribute names in custom entity types:
+# uuid, name, group_id, labels, created_at, summary, attributes, name_embedding
+# These are reserved by Graphiti's core EntityNode class
+
 class Person(BaseModel):
     """A person entity with employment details."""
-    name: str = Field(description="Full name of the person")
+    full_name: str = Field(description="Full name of the person")
     role: Optional[str] = Field(None, description="Job title or role")
     department: Optional[str] = Field(None, description="Department they work in")
     hire_date: Optional[str] = Field(None, description="Date they were hired (YYYY-MM-DD format)")
@@ -54,7 +62,7 @@ class Person(BaseModel):
 
 class Department(BaseModel):
     """A department or team within an organization."""
-    name: str = Field(description="Name of the department")
+    department_name: str = Field(description="Name of the department")
     budget: Optional[float] = Field(None, description="Annual budget in USD")
     employee_count: Optional[int] = Field(None, description="Number of employees")
     location: Optional[str] = Field(None, description="Physical location or office")
@@ -62,7 +70,7 @@ class Department(BaseModel):
 
 class Project(BaseModel):
     """A project or initiative."""
-    name: str = Field(description="Name of the project")
+    project_name: str = Field(description="Name of the project")
     status: Optional[str] = Field(None, description="Project status: Planning, Active, On Hold, Completed, Cancelled")
     start_date: Optional[str] = Field(None, description="Project start date (YYYY-MM-DD format)")
     end_date: Optional[str] = Field(None, description="Project end date (YYYY-MM-DD format)")
@@ -71,7 +79,7 @@ class Project(BaseModel):
 
 class Technology(BaseModel):
     """A technology, tool, or platform."""
-    name: str = Field(description="Name of the technology")
+    tech_name: str = Field(description="Name of the technology")
     category: Optional[str] = Field(None, description="Category: Programming Language, Framework, Database, Cloud Service, etc.")
     version: Optional[str] = Field(None, description="Version number or release")
     vendor: Optional[str] = Field(None, description="Company or organization that develops it")
@@ -445,6 +453,8 @@ if __name__ == "__main__":
     print("• edge_types: dict[str, BaseModel] (NOT list)")
     print("• edge_type_map values: list[str] (class names as strings)")
     print("• Custom types passed to add_episode(), NOT constructor")
+    print("• AVOID protected attributes: uuid, name, group_id, labels,")
+    print("  created_at, summary, attributes, name_embedding")
     print("=" * 60)
     
     # Run the main test
