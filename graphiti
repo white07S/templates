@@ -1,17 +1,17 @@
 """
-Complete Graphiti Custom Edge Testing Example
+Complete Graphiti Custom Edge Testing Example - CORRECTED FOR 0.17.6
 
 This example demonstrates how to:
 1. Define custom entity types and edge types
 2. Set up edge type mappings
-3. Add episodes that create custom edges
+3. Add episodes with custom types using add_episode method
 4. Search and filter by custom edge types
 5. Validate the results
 
 Requirements:
 - Neo4j database running (default: bolt://localhost:7687)
 - OpenAI API key set in environment
-- Python packages: graphiti, neo4j, openai, pydantic
+- Python packages: graphiti-core==0.17.6, neo4j, openai, pydantic
 """
 
 import asyncio
@@ -21,8 +21,8 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
-from graphiti import Graphiti
-from graphiti.search import SearchFilters
+from graphiti_core import Graphiti
+from graphiti_core.search import SearchFilters
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -180,15 +180,16 @@ SAMPLE_EPISODES = [
 # ============================================================================
 
 async def test_custom_edges():
-    """Test custom edge types in Graphiti."""
+    """Test custom edge types in Graphiti 0.17.6."""
     
-    print("🚀 Starting Graphiti Custom Edge Testing...")
+    print("🚀 Starting Graphiti Custom Edge Testing (v0.17.6)...")
     
-    # Initialize Graphiti with custom types
+    # Initialize Graphiti with correct constructor for 0.17.6
+    # Custom types are passed to add_episode, NOT to constructor
     client = Graphiti(
-        entity_types=[Person, Department, Project, Technology],
-        edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
-        edge_type_map=EDGE_TYPE_MAP
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", "password")
     )
     
     try:
@@ -196,16 +197,22 @@ async def test_custom_edges():
         print("📊 Initializing knowledge graph...")
         await client.build_indices_and_constraints()
         
-        # Add episodes to create entities and custom edges
-        print("📝 Adding episodes...")
+        # Add episodes with custom entity and edge types
+        print("📝 Adding episodes with custom entity types...")
         for i, episode in enumerate(SAMPLE_EPISODES, 1):
             print(f"   Adding episode {i}/{len(SAMPLE_EPISODES)}: {episode['episode_id']}")
+            
+            # CORRECTED: Pass custom types to add_episode method
             result = await client.add_episode(
                 name=episode["episode_id"],
                 episode_body=episode["content"],
-                reference_time=datetime.now()
+                reference_time=datetime.now(),
+                # Custom types are passed here, not to constructor
+                entity_types=[Person, Department, Project, Technology],
+                edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+                edge_type_map=EDGE_TYPE_MAP
             )
-            print(f"   ✅ Added episode with {len(result.entities)} entities and {len(result.edges)} edges")
+            print(f"   ✅ Added episode with {len(result.nodes)} entities and {len(result.edges)} edges")
         
         print("\n🔍 Testing Custom Edge Searches...")
         
@@ -213,7 +220,7 @@ async def test_custom_edges():
         print("\n1️⃣ Searching for Employment relationships...")
         employment_results = await client.search(
             query="employment relationships and job roles",
-            search_filters=SearchFilters(edge_types=["Employment"])
+            search_filter=SearchFilters(edge_types=["Employment"])
         )
         print(f"   Found {len(employment_results)} employment-related edges:")
         for edge in employment_results[:3]:  # Show first 3
@@ -223,7 +230,7 @@ async def test_custom_edges():
         print("\n2️⃣ Searching for Mentorship relationships...")
         mentorship_results = await client.search(
             query="mentorship and coaching relationships",
-            search_filters=SearchFilters(edge_types=["Mentorship"])
+            search_filter=SearchFilters(edge_types=["Mentorship"])
         )
         print(f"   Found {len(mentorship_results)} mentorship-related edges:")
         for edge in mentorship_results:
@@ -233,7 +240,7 @@ async def test_custom_edges():
         print("\n3️⃣ Searching for Project Assignment relationships...")
         project_results = await client.search(
             query="project assignments and roles",
-            search_filters=SearchFilters(edge_types=["ProjectAssignment"])
+            search_filter=SearchFilters(edge_types=["ProjectAssignment"])
         )
         print(f"   Found {len(project_results)} project assignment edges:")
         for edge in project_results:
@@ -243,7 +250,7 @@ async def test_custom_edges():
         print("\n4️⃣ Searching for Technology Usage relationships...")
         tech_results = await client.search(
             query="technology skills and usage",
-            search_filters=SearchFilters(edge_types=["TechnologyUsage"])
+            search_filter=SearchFilters(edge_types=["TechnologyUsage"])
         )
         print(f"   Found {len(tech_results)} technology usage edges:")
         for edge in tech_results:
@@ -253,7 +260,7 @@ async def test_custom_edges():
         print("\n5️⃣ Searching for Collaboration relationships...")
         collab_results = await client.search(
             query="collaboration between departments and teams",
-            search_filters=SearchFilters(edge_types=["Collaboration"])
+            search_filter=SearchFilters(edge_types=["Collaboration"])
         )
         print(f"   Found {len(collab_results)} collaboration edges:")
         for edge in collab_results:
@@ -263,7 +270,7 @@ async def test_custom_edges():
         print("\n6️⃣ Searching for Person entities...")
         person_results = await client.search(
             query="software engineers and developers",
-            search_filters=SearchFilters(entity_types=["Person"])
+            search_filter=SearchFilters(entity_types=["Person"])
         )
         print(f"   Found {len(person_results)} person-related edges:")
         for edge in person_results[:3]:
@@ -273,8 +280,8 @@ async def test_custom_edges():
         print("\n7️⃣ Center node search for Sarah Johnson with Employment edges...")
         sarah_results = await client.search(
             query="Sarah Johnson employment and work relationships",
-            center_node_name="Sarah Johnson",
-            search_filters=SearchFilters(edge_types=["Employment", "ProjectAssignment", "Mentorship"])
+            center_node_uuid=None,  # Would need to get actual UUID from search
+            search_filter=SearchFilters(edge_types=["Employment", "ProjectAssignment", "Mentorship"])
         )
         print(f"   Found {len(sarah_results)} edges related to Sarah Johnson:")
         for edge in sarah_results:
@@ -284,7 +291,7 @@ async def test_custom_edges():
         print("\n8️⃣ All edges (no filtering)...")
         all_results = await client.search(
             query="relationships and connections",
-            limit=20
+            num_results=20
         )
         print(f"   Found {len(all_results)} total edges:")
         
@@ -328,9 +335,9 @@ async def test_edge_attributes():
     print("\n🔬 Testing Custom Edge Attribute Extraction...")
     
     client = Graphiti(
-        entity_types=[Person, Department, Project, Technology],
-        edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
-        edge_type_map=EDGE_TYPE_MAP
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", "password")
     )
     
     try:
@@ -350,15 +357,17 @@ async def test_edge_attributes():
         result = await client.add_episode(
             name="detailed_attributes_test",
             episode_body=detailed_episode,
-            reference_time=datetime.now()
+            reference_time=datetime.now(),
+            entity_types=[Person, Department, Project, Technology],
+            edge_types=[Employment, ProjectAssignment, TechnologyUsage, Mentorship, Collaboration],
+            edge_type_map=EDGE_TYPE_MAP
         )
         
-        print(f"✅ Added detailed episode with {len(result.entities)} entities and {len(result.edges)} edges")
+        print(f"✅ Added detailed episode with {len(result.nodes)} entities and {len(result.edges)} edges")
         
         # Search for edges with detailed attributes
         detailed_results = await client.search(
-            query="Jennifer Smith employment project assignment mentorship",
-            center_node_name="Jennifer Smith"
+            query="Jennifer Smith employment project assignment mentorship"
         )
         
         print("🔍 Edges with detailed attributes:")
