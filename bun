@@ -1,0 +1,66 @@
+Here’s how you can set up Bun from the bun-linux-x64.zip you downloaded:
+
+⸻
+
+🛠️ Step-by-Step Installation
+
+1. Unzip the archive
+
+unzip bun-linux-x64.zip -d ~/.bun
+
+This creates a folder like ~/.bun/bun-linux-x64/ with the binary inside.
+
+2. Move binary to the proper place
+
+mv ~/.bun/bun-linux-x64/bun ~/.bun/bin/
+chmod +x ~/.bun/bin/bun
+
+3. Add Bun to your PATH
+
+Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
+
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+Then apply it:
+
+source ~/.bashrc  # or `~/.zshrc`, depending on your shell
+
+4. Verify the installation
+
+bun --version
+
+You should see a version number, for example 1.2.18.
+
+⸻
+
+🎯 What the Official Installer Does (for Reference)
+
+The official script from curl -fsSL https://bun.sh/install | bash:
+	•	Detects your CPU architecture and AVX2 capability
+	•	Downloads the correct .zip
+	•	Extracts and places the binary into ~/.bun/bin
+	•	Adds Bun to your PATH in your shell profile  ￼ ￼
+
+⸻
+
+✅ Final Check
+	•	Run:
+
+bun --help
+
+
+	•	It should display Bun’s CLI usage and options.
+
+⸻
+
+Optional Cleanup
+
+Once Bun’s working:
+
+rm bunny.zip
+
+
+⸻
+
+That’s it—Bun should now be ready to go! Need help running a Bun project or using one of its tools? Just ask 😊
