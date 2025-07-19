@@ -1,66 +1,125 @@
-Here’s how you can set up Bun from the bun-linux-x64.zip you downloaded:
+Below are precise, minimal steps to set up the bun-linux-x64.zip archive you downloaded, plus optional verification & upgrade notes.
 
 ⸻
 
-🛠️ Step-by-Step Installation
+1. Unzip & place the binary
 
-1. Unzip the archive
+# inside the directory where bun-linux-x64.zip was downloaded
+unzip bun-linux-x64.zip
+# This should give you a single executable named `bun`
 
-unzip bun-linux-x64.zip -d ~/.bun
-
-This creates a folder like ~/.bun/bun-linux-x64/ with the binary inside.
-
-2. Move binary to the proper place
-
-mv ~/.bun/bun-linux-x64/bun ~/.bun/bin/
+# Create a per-user location (matches what the official installer uses)
+mkdir -p ~/.bun/bin
+mv bun ~/.bun/bin/
 chmod +x ~/.bun/bin/bun
 
-3. Add Bun to your PATH
+The official install script similarly resolves your platform to linux-x64, requires unzip, and deposits the binary into a user directory.  ￼
 
-Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
+Older manual instructions also describe creating ~/.bun/bin and putting the extracted bun binary there.  ￼
 
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+⸻
 
-Then apply it:
+2. Add Bun to your PATH
 
-source ~/.bashrc  # or `~/.zshrc`, depending on your shell
+Add this line to the end of one of your shell startup files (~/.bashrc, ~/.zshrc, etc.):
 
-4. Verify the installation
+export PATH="$HOME/.bun/bin:$PATH"
+
+Then reload your shell:
+
+exec "$SHELL"
+# or
+source ~/.bashrc   # adjust for your shell
+
+The installer script ensures the binary directory is on PATH; replicating this manually is required for your own install.  ￼
+
+⸻
+
+3. Verify
 
 bun --version
 
-You should see a version number, for example 1.2.18.
+You should see the version number (e.g. 1.2.x). Current Linux x64 release versions are distributed as a single binary package.  ￼
+
+If you are on very old kernels (<5.1) you may hit performance issues; recommended minimum kernel is 5.6 for optimal bun install networking performance.  ￼
 
 ⸻
 
-🎯 What the Official Installer Does (for Reference)
+4. (Optional) Baseline build (no AVX2)
 
-The official script from curl -fsSL https://bun.sh/install | bash:
-	•	Detects your CPU architecture and AVX2 capability
-	•	Downloads the correct .zip
-	•	Extracts and places the binary into ~/.bun/bin
-	•	Adds Bun to your PATH in your shell profile  ￼ ￼
+If your CPU lacks AVX2 and the normal binary crashes, use the “baseline” (non-AVX2) build (bun-linux-x64-baseline).  ￼
 
 ⸻
 
-✅ Final Check
-	•	Run:
+5. Using Bun’s package manager
 
-bun --help
+Install project dependencies:
 
+bun init        # scaffolds a package.json if you want (interactive)
+bun install     # installs deps from package.json
+bun add <pkg>   # add a dependency
+bun run <script>
 
-	•	It should display Bun’s CLI usage and options.
-
-⸻
-
-Optional Cleanup
-
-Once Bun’s working:
-
-rm bunny.zip
-
+bun install is Bun’s fast package manager / npm client; its behavior and configuration (flags, bunfig.toml, env vars) are documented in the CLI docs.  ￼
 
 ⸻
 
-That’s it—Bun should now be ready to go! Need help running a Bun project or using one of its tools? Just ask 😊
+6. Running & bundling
+
+Run a file:
+
+bun run src/index.ts
+
+Create a single-file executable (optional bundling capability that embeds runtime):
+
+bun build ./src/index.ts --compile --outfile app
+
+Bun can bundle everything into a self-contained executable including its runtime.  ￼
+
+⸻
+
+7. Updating later
+
+To update manually, repeat the download, unzip, and replace the binary in ~/.bun/bin/. The official script supports specifying a version tag for installs/updates, e.g.:
+
+curl -fsSL https://bun.com/install | bash -s "bun-v1.2.19"
+
+This fetches a specific tagged release.  ￼
+
+⸻
+
+8. Alternative install methods (FYI)
+
+If you prefer, you can let the script handle everything (curl … | bash) or install via npm install -g bun (which fetches the platform binary).  ￼ ￼
+
+⸻
+
+9. Troubleshooting quick hits
+
+Issue	Fix
+bun: command not found	PATH not updated; echo $PATH and ensure $HOME/.bun/bin appears.  ￼
+unzip: command not found	Install unzip (sudo apt install unzip / sudo dnf install unzip etc.). The script explicitly requires it.  ￼
+Crash on older CPU	Use baseline build (no AVX2).  ￼
+Slow network installs on old kernel	Upgrade to kernel ≥5.6.  ￼
+
+
+⸻
+
+10. Minimal end-to-end script (copy/paste)
+
+# assuming bun-linux-x64.zip is in current directory
+set -euo pipefail
+unzip -o bun-linux-x64.zip
+mkdir -p ~/.bun/bin
+mv bun ~/.bun/bin/
+chmod +x ~/.bun/bin/bun
+if ! grep -q 'export PATH="$HOME/.bun/bin:$PATH"' ~/.bashrc 2>/dev/null; then
+  echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc
+fi
+echo "Installed Bun at ~/.bun/bin/bun"
+~/.bun/bin/bun --version
+
+
+⸻
+
+Done. Let me know your shell (bash, zsh, fish) or distro if you want a tailored snippet (fish needs a different PATH export).
