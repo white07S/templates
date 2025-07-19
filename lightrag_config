@@ -1,0 +1,58 @@
+# LightRAG Server Configuration for vLLM
+# Save this as .env in your LightRAG directory
+
+### Server Configuration
+HOST=0.0.0.0
+PORT=9621
+WORKERS=2
+CORS_ORIGINS=http://localhost:3000,http://localhost:8080,http://localhost:9621
+WEBUI_TITLE='vLLM Graph RAG Engine'
+WEBUI_DESCRIPTION="LightRAG with vLLM Local Models"
+
+### Directory Configuration
+# WORKING_DIR=/absolute/path/to/your/working/dir  # Optional: defaults to current directory
+# INPUT_DIR=/absolute/path/to/your/input/dir     # Optional: for document uploads
+
+### Logging Configuration
+LOG_LEVEL=INFO
+VERBOSE=True
+
+### LLM Configuration (vLLM Chat Endpoint)
+LLM_MODEL=your-chat-model-name  # Replace with your actual chat model name
+LLM_BINDING=openai                          # Use OpenAI-compatible binding
+LLM_BINDING_HOST=http://localhost:8000/v1   # Your vLLM chat server
+LLM_BINDING_API_KEY=EMPTY                   # vLLM doesn't require real API key
+LLM_MODEL_MAX_TOKENS=8192
+LLM_MODEL_MAX_ASYNC=4
+
+### Embedding Configuration (vLLM Embedding Endpoint)
+EMBEDDING_MODEL=your-embedding-model-name   # Replace with your actual embedding model name
+EMBEDDING_DIM=768                           # Update to match your embedding model dimension
+EMBEDDING_BINDING=openai                    # Use OpenAI-compatible binding
+EMBEDDING_BINDING_HOST=http://localhost:8001/v1  # Your vLLM embedding server
+EMBEDDING_BINDING_API_KEY=EMPTY             # vLLM doesn't require real API key
+
+### RAG Query Settings
+HISTORY_TURNS=3
+COSINE_THRESHOLD=0.2
+TOP_K=60
+MAX_TOKEN_TEXT_CHUNK=4000
+MAX_TOKEN_RELATION_DESC=4000
+MAX_TOKEN_ENTITY_DESC=500
+
+### Document Processing Settings
+MAX_PARALLEL_INSERT=2
+ENABLE_LLM_CACHE_FOR_EXTRACT=true
+SUMMARY_LANGUAGE=English
+
+### Storage Configuration (using local storage for simplicity)
+LIGHTRAG_KV_STORAGE=JsonKVStorage
+LIGHTRAG_VECTOR_STORAGE=NanoVectorDBStorage
+LIGHTRAG_GRAPH_STORAGE=NetworkXStorage
+LIGHTRAG_DOC_STATUS_STORAGE=JsonDocStatusStorage
+
+### Optional: Enable auto-scan at startup
+# ENABLE_AUTO_SCAN_AT_STARTUP=true
+
+### Optional: Set workspace name for data isolation
+# WORKSPACE=my_vllm_workspace
