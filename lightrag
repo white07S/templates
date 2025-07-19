@@ -1,0 +1,261 @@
+import os
+import asyncio
+import numpy as np
+from lightrag.llm.openai import openai_complete_if_cache, openai_embed
+
+async def test_llm_function():
+    """Test the openai_complete_if_cache function with Upstage API"""
+    print("🧪 Testing LLM Function (openai_complete_if_cache)...")
+    
+    try:
+        # Test basic completion
+        prompt = "What is artificial intelligence? Please provide a brief explanation."
+        
+        result = await openai_complete_if_cache(
+            model="solar-mini",
+            prompt=prompt,
+            api_key=os.getenv("UPSTAGE_API_KEY"),
+            base_url="https://api.upstage.ai/v1/solar",
+            max_tokens=150,
+            temperature=0.7
+        )
+        
+        print("✅ LLM Function Test PASSED")
+        print(f"📝 Response: {result}")
+        print(f"📊 Response length: {len(result)} characters")
+        return True
+        
+    except Exception as e:
+        print(f"❌ LLM Function Test FAILED: {e}")
+        return False
+
+async def test_embedding_function():
+    """Test the openai_embed function with Upstage API"""
+    print("\n🧪 Testing Embedding Function (openai_embed)...")
+    
+    try:
+        # Test embedding generation
+        test_texts = [
+            "This is a test sentence for embedding.",
+            "Machine learning is a subset of artificial intelligence.",
+            "Python is a popular programming language."
+        ]
+        
+        embeddings = await openai_embed(
+            texts=test_texts,
+            model="solar-embedding-1-large-query",
+            api_key=os.getenv("UPSTAGE_API_KEY"),
+            base_url="https://api.upstage.ai/v1/solar"
+        )
+        
+        print("✅ Embedding Function Test PASSED")
+        print(f"📊 Embeddings shape: {embeddings.shape}")
+        print(f"📊 Number of texts: {len(test_texts)}")
+        print(f"📊 Embedding dimension: {embeddings.shape[1]}")
+        print(f"📊 Data type: {embeddings.dtype}")
+        
+        # Test embedding similarity (cosine similarity between first two embeddings)
+        from numpy.linalg import norm
+        
+        def cosine_similarity(a, b):
+            return np.dot(a, b) / (norm(a) * norm(b))
+        
+        similarity = cosine_similarity(embeddings[0], embeddings[1])
+        print(f"📊 Cosine similarity between first two embeddings: {similarity:.4f}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Embedding Function Test FAILED: {e}")
+        return False
+
+async def test_embedding_with_custom_function():
+    """Test the embedding function as it would be used in LightRAG"""
+    print("\n🧪 Testing Custom Embedding Function...")
+    
+    async def embedding_func(texts: list[str]) -> np.ndarray:
+        return await openai_embed(
+            texts,
+            model="solar-embedding-1-large-query",
+            api_key=os.getenv("UPSTAGE_API_KEY"),
+            base_url="https://api.upstage.ai/v1/solar"
+        )
+    
+    try:
+        test_texts = ["Hello world", "How are you?"]
+        result = await embedding_func(test_texts)
+        
+        print("✅ Custom Embedding Function Test PASSED")
+        print(f"📊 Result shape: {result.shape}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Custom Embedding Function Test FAILED: {e}")
+        return False
+
+async def test_llm_with_system_prompt():
+    """Test LLM function with system prompt and history"""
+    print("\n🧪 Testing LLM Function with System Prompt...")
+    
+    try:
+        system_prompt = "You are a helpful assistant that provides concise answers."
+        history_messages = [
+            {"role": "user", "content": "What is Python?"},
+            {"role": "assistant", "content": "Python is a high-level programming language."}
+        ]
+        prompt = "Can you tell me more about its uses?"
+        
+        result = await openai_complete_if_cache(
+            model="solar-mini",
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages,
+            api_key=os.getenv("UPSTAGE_API_KEY"),
+            base_url="https://api.upstage.ai/v1/solar",
+            max_tokens=100
+        )
+        
+        print("✅ LLM with System Prompt Test PASSED")
+        print(f"📝 Response: {result}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ LLM with System Prompt Test FAILED: {e}")
+        return False
+
+async def main():
+    """Run all tests"""
+    print("🚀 Starting LightRAG Functions Test Suite")
+    print("=" * 50)
+    
+    # Check if API key is set
+    if not os.getenv("UPSTAGE_API_KEY"):
+        print("❌ Error: UPSTAGE_API_KEY environment variable not set!")
+        print("Please set your Upstage API key:")
+        print("export UPSTAGE_API_KEY='your-api-key-here'")
+        return
+    
+    tests_passed = 0
+    total_tests = 4
+    
+    # Run tests
+    if await test_llm_function():
+        tests_passed += 1
+    
+    if await test_embedding_function():
+        tests_passed += 1
+        
+    if await test_embedding_with_custom_function():
+        tests_passed += 1
+        
+    if await test_llm_with_system_prompt():
+        tests_passed += 1
+    
+    # Summary
+    print("\n" + "=" * 50)
+    print("📊 TEST SUMMARY")
+    print(f"✅ Tests passed: {tests_passed}/{total_tests}")
+    
+    if tests_passed == total_tests:
+        print("🎉 All tests passed! Your functions are working correctly.")
+        print("💡 You can now use these functions with LightRAG.")
+    else:
+        print("⚠️  Some tests failed. Please check your API key and configuration.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+import os
+import asyncio
+import numpy as np
+from lightrag import LightRAG, QueryParam
+from lightrag.llm.openai import openai_complete_if_cache, openai_embed
+from lightrag.utils import EmbeddingFunc
+from lightrag.kg.shared_storage import initialize_pipeline_status
+from lightrag.utils import setup_logger
+
+# Setup logging for LightRAG
+setup_logger("lightrag", level="INFO")
+
+WORKING_DIR = "./lightrag_storage"
+
+# Ensure working directory exists
+if not os.path.exists(WORKING_DIR):
+    os.mkdir(WORKING_DIR)
+
+async def llm_model_func(
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+) -> str:
+    return await openai_complete_if_cache(
+        "solar-mini",
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        api_key=os.getenv("UPSTAGE_API_KEY"),
+        base_url="https://api.upstage.ai/v1/solar",
+        **kwargs
+    )
+
+async def embedding_func(texts: list[str]) -> np.ndarray:
+    return await openai_embed(
+        texts,
+        model="solar-embedding-1-large-query",
+        api_key=os.getenv("UPSTAGE_API_KEY"),
+        base_url="https://api.upstage.ai/v1/solar"
+    )
+
+async def initialize_rag():
+    rag = LightRAG(
+        working_dir=WORKING_DIR,
+        llm_model_func=llm_model_func,
+        embedding_func=EmbeddingFunc(
+            embedding_dim=4096,
+            max_token_size=8192,
+            func=embedding_func
+        )
+    )
+    await rag.initialize_storages()
+    await initialize_pipeline_status()
+    return rag
+
+async def main():
+    """Main function to demonstrate LightRAG usage"""
+    try:
+        # Initialize RAG instance
+        rag = await initialize_rag()
+        
+        # Insert some sample text
+        sample_text = "Python is a high-level programming language created by Guido van Rossum. It's widely used for web development, data science, and artificial intelligence."
+        rag.insert(sample_text)
+        
+        # Perform different types of queries
+        query = "What is Python used for?"
+        
+        # Hybrid search (recommended)
+        print("=== Hybrid Search ===")
+        result = await rag.query(query, param=QueryParam(mode="hybrid"))
+        print(result)
+        
+        print("\n=== Local Search ===")
+        result = await rag.query(query, param=QueryParam(mode="local"))
+        print(result)
+        
+        print("\n=== Global Search ===")
+        result = await rag.query(query, param=QueryParam(mode="global"))
+        print(result)
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        if 'rag' in locals():
+            await rag.finalize_storages()
+
+if __name__ == "__main__":
+    # Make sure to set your UPSTAGE_API_KEY environment variable before running
+    if not os.getenv("UPSTAGE_API_KEY"):
+        print("Error: Please set the UPSTAGE_API_KEY environment variable")
+        exit(1)
+    
+    asyncio.run(main())
