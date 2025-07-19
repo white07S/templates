@@ -3,52 +3,65 @@ import asyncio
 import numpy as np
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
 
+# vLLM Configuration
+# Chat endpoint (port 8000)
+VLLM_CHAT_BASE_URL = "http://localhost:8000/v1"
+VLLM_CHAT_API_KEY = "EMPTY"  # vLLM doesn't require real API key for local servers
+VLLM_CHAT_MODEL = "your-chat-model-name"  # Replace with your actual model name
+
+# Embedding endpoint (port 8001) 
+VLLM_EMBEDDING_BASE_URL = "http://localhost:8001/v1"
+VLLM_EMBEDDING_API_KEY = "EMPTY"  # vLLM doesn't require real API key for local servers
+VLLM_EMBEDDING_MODEL = "your-embedding-model-name"  # Replace with your actual embedding model name
+
 async def test_llm_function():
-    """Test the openai_complete_if_cache function with Upstage API"""
-    print("🧪 Testing LLM Function (openai_complete_if_cache)...")
+    """Test the openai_complete_if_cache function with vLLM chat endpoint"""
+    print("🧪 Testing vLLM Chat Completion Function...")
     
     try:
         # Test basic completion
         prompt = "What is artificial intelligence? Please provide a brief explanation."
         
         result = await openai_complete_if_cache(
-            model="solar-mini",
+            model=VLLM_CHAT_MODEL,
             prompt=prompt,
-            api_key=os.getenv("UPSTAGE_API_KEY"),
-            base_url="https://api.upstage.ai/v1/solar",
+            api_key=VLLM_CHAT_API_KEY,
+            base_url=VLLM_CHAT_BASE_URL,
             max_tokens=150,
             temperature=0.7
         )
         
-        print("✅ LLM Function Test PASSED")
+        print("✅ vLLM Chat Function Test PASSED")
         print(f"📝 Response: {result}")
         print(f"📊 Response length: {len(result)} characters")
         return True
         
     except Exception as e:
-        print(f"❌ LLM Function Test FAILED: {e}")
+        print(f"❌ vLLM Chat Function Test FAILED: {e}")
+        print(f"💡 Make sure your vLLM chat server is running on {VLLM_CHAT_BASE_URL}")
+        print(f"💡 Check if model name '{VLLM_CHAT_MODEL}' is correct")
         return False
 
 async def test_embedding_function():
-    """Test the openai_embed function with Upstage API"""
-    print("\n🧪 Testing Embedding Function (openai_embed)...")
+    """Test the openai_embed function with vLLM embedding endpoint"""
+    print("\n🧪 Testing vLLM Embedding Function...")
     
     try:
         # Test embedding generation
         test_texts = [
             "This is a test sentence for embedding.",
-            "Machine learning is a subset of artificial intelligence.",
+            "Machine learning is a subset of artificial intelligence.", 
             "Python is a popular programming language."
         ]
         
         embeddings = await openai_embed(
             texts=test_texts,
-            model="solar-embedding-1-large-query",
-            api_key=os.getenv("UPSTAGE_API_KEY"),
-            base_url="https://api.upstage.ai/v1/solar"
+            model=VLLM_EMBEDDING_MODEL,
+            api_key=VLLM_EMBEDDING_API_KEY,
+            base_url=VLLM_EMBEDDING_BASE_URL
         )
         
-        print("✅ Embedding Function Test PASSED")
+        print("✅ vLLM Embedding Function Test PASSED")
         print(f"📊 Embeddings shape: {embeddings.shape}")
         print(f"📊 Number of texts: {len(test_texts)}")
         print(f"📊 Embedding dimension: {embeddings.shape[1]}")
@@ -66,36 +79,38 @@ async def test_embedding_function():
         return True
         
     except Exception as e:
-        print(f"❌ Embedding Function Test FAILED: {e}")
+        print(f"❌ vLLM Embedding Function Test FAILED: {e}")
+        print(f"💡 Make sure your vLLM embedding server is running on {VLLM_EMBEDDING_BASE_URL}")
+        print(f"💡 Check if model name '{VLLM_EMBEDDING_MODEL}' is correct")
         return False
 
 async def test_embedding_with_custom_function():
     """Test the embedding function as it would be used in LightRAG"""
-    print("\n🧪 Testing Custom Embedding Function...")
+    print("\n🧪 Testing Custom vLLM Embedding Function...")
     
     async def embedding_func(texts: list[str]) -> np.ndarray:
         return await openai_embed(
             texts,
-            model="solar-embedding-1-large-query",
-            api_key=os.getenv("UPSTAGE_API_KEY"),
-            base_url="https://api.upstage.ai/v1/solar"
+            model=VLLM_EMBEDDING_MODEL,
+            api_key=VLLM_EMBEDDING_API_KEY,
+            base_url=VLLM_EMBEDDING_BASE_URL
         )
     
     try:
         test_texts = ["Hello world", "How are you?"]
         result = await embedding_func(test_texts)
         
-        print("✅ Custom Embedding Function Test PASSED")
+        print("✅ Custom vLLM Embedding Function Test PASSED")
         print(f"📊 Result shape: {result.shape}")
         return True
         
     except Exception as e:
-        print(f"❌ Custom Embedding Function Test FAILED: {e}")
+        print(f"❌ Custom vLLM Embedding Function Test FAILED: {e}")
         return False
 
 async def test_llm_with_system_prompt():
-    """Test LLM function with system prompt and history"""
-    print("\n🧪 Testing LLM Function with System Prompt...")
+    """Test vLLM LLM function with system prompt and history"""
+    print("\n🧪 Testing vLLM Chat with System Prompt...")
     
     try:
         system_prompt = "You are a helpful assistant that provides concise answers."
@@ -106,39 +121,127 @@ async def test_llm_with_system_prompt():
         prompt = "Can you tell me more about its uses?"
         
         result = await openai_complete_if_cache(
-            model="solar-mini",
+            model=VLLM_CHAT_MODEL,
             prompt=prompt,
             system_prompt=system_prompt,
             history_messages=history_messages,
-            api_key=os.getenv("UPSTAGE_API_KEY"),
-            base_url="https://api.upstage.ai/v1/solar",
-            max_tokens=100
+            api_key=VLLM_CHAT_API_KEY,
+            base_url=VLLM_CHAT_BASE_URL,
+            max_tokens=100,
+            temperature=0.7
         )
         
-        print("✅ LLM with System Prompt Test PASSED")
+        print("✅ vLLM Chat with System Prompt Test PASSED")
         print(f"📝 Response: {result}")
         return True
         
     except Exception as e:
-        print(f"❌ LLM with System Prompt Test FAILED: {e}")
+        print(f"❌ vLLM Chat with System Prompt Test FAILED: {e}")
         return False
+
+async def test_server_connectivity():
+    """Test if vLLM servers are reachable"""
+    print("\n🔍 Testing vLLM Server Connectivity...")
+    
+    import aiohttp
+    
+    # Test chat server
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{VLLM_CHAT_BASE_URL.replace('/v1', '')}/health") as resp:
+                if resp.status == 200:
+                    print("✅ Chat server (port 8000) is reachable")
+                    chat_reachable = True
+                else:
+                    print(f"⚠️ Chat server responded with status {resp.status}")
+                    chat_reachable = False
+    except Exception as e:
+        print(f"❌ Chat server (port 8000) is not reachable: {e}")
+        chat_reachable = False
+    
+    # Test embedding server
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{VLLM_EMBEDDING_BASE_URL.replace('/v1', '')}/health") as resp:
+                if resp.status == 200:
+                    print("✅ Embedding server (port 8001) is reachable")
+                    embedding_reachable = True
+                else:
+                    print(f"⚠️ Embedding server responded with status {resp.status}")
+                    embedding_reachable = False
+    except Exception as e:
+        print(f"❌ Embedding server (port 8001) is not reachable: {e}")
+        embedding_reachable = False
+    
+    return chat_reachable, embedding_reachable
+
+async def test_model_listing():
+    """Test listing available models from vLLM servers"""
+    print("\n📋 Testing Model Listing...")
+    
+    import aiohttp
+    import json
+    
+    # List models from chat server
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {VLLM_CHAT_API_KEY}"}
+            async with session.get(f"{VLLM_CHAT_BASE_URL}/models", headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    models = [model["id"] for model in data.get("data", [])]
+                    print(f"✅ Chat server models: {models}")
+                else:
+                    print(f"⚠️ Could not list chat models (status {resp.status})")
+    except Exception as e:
+        print(f"❌ Error listing chat models: {e}")
+    
+    # List models from embedding server
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {VLLM_EMBEDDING_API_KEY}"}
+            async with session.get(f"{VLLM_EMBEDDING_BASE_URL}/models", headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    models = [model["id"] for model in data.get("data", [])]
+                    print(f"✅ Embedding server models: {models}")
+                else:
+                    print(f"⚠️ Could not list embedding models (status {resp.status})")
+    except Exception as e:
+        print(f"❌ Error listing embedding models: {e}")
 
 async def main():
     """Run all tests"""
-    print("🚀 Starting LightRAG Functions Test Suite")
-    print("=" * 50)
+    print("🚀 Starting vLLM Functions Test Suite")
+    print("=" * 60)
     
-    # Check if API key is set
-    if not os.getenv("UPSTAGE_API_KEY"):
-        print("❌ Error: UPSTAGE_API_KEY environment variable not set!")
-        print("Please set your Upstage API key:")
-        print("export UPSTAGE_API_KEY='your-api-key-here'")
+    # Print configuration
+    print("🔧 Configuration:")
+    print(f"   Chat server: {VLLM_CHAT_BASE_URL}")
+    print(f"   Chat model: {VLLM_CHAT_MODEL}")
+    print(f"   Embedding server: {VLLM_EMBEDDING_BASE_URL}")
+    print(f"   Embedding model: {VLLM_EMBEDDING_MODEL}")
+    print("=" * 60)
+    
+    # Check server connectivity first
+    chat_reachable, embedding_reachable = await test_server_connectivity()
+    
+    if not chat_reachable or not embedding_reachable:
+        print("\n❌ Server connectivity issues detected!")
+        print("\n💡 To start vLLM servers:")
+        print("   # For chat model on port 8000:")
+        print("   vllm serve <your-chat-model> --port 8000")
+        print("   # For embedding model on port 8001:")
+        print("   vllm serve <your-embedding-model> --port 8001")
         return
+    
+    # List available models
+    await test_model_listing()
     
     tests_passed = 0
     total_tests = 4
     
-    # Run tests
+    # Run functionality tests
     if await test_llm_function():
         tests_passed += 1
     
@@ -152,17 +255,27 @@ async def main():
         tests_passed += 1
     
     # Summary
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("📊 TEST SUMMARY")
     print(f"✅ Tests passed: {tests_passed}/{total_tests}")
     
     if tests_passed == total_tests:
-        print("🎉 All tests passed! Your functions are working correctly.")
+        print("🎉 All tests passed! Your vLLM endpoints are working correctly.")
         print("💡 You can now use these functions with LightRAG.")
     else:
-        print("⚠️  Some tests failed. Please check your API key and configuration.")
+        print("⚠️  Some tests failed. Please check your vLLM server configuration.")
+        print("\n💡 Troubleshooting tips:")
+        print("   1. Make sure both vLLM servers are running")
+        print("   2. Verify the model names match your deployed models")
+        print("   3. Check if the ports (8000, 8001) are correct")
+        print("   4. Ensure models support the required endpoints")
 
 if __name__ == "__main__":
+    print("⚠️  IMPORTANT: Update the model names before running!")
+    print(f"   Current chat model: '{VLLM_CHAT_MODEL}'")
+    print(f"   Current embedding model: '{VLLM_EMBEDDING_MODEL}'")
+    print("   Edit the script to set your actual model names.\n")
+    
     asyncio.run(main())
 
 
@@ -181,6 +294,16 @@ setup_logger("lightrag", level="INFO")
 
 WORKING_DIR = "./lightrag_storage"
 
+# vLLM Configuration
+VLLM_CHAT_BASE_URL = "http://localhost:8000/v1"
+VLLM_CHAT_API_KEY = "EMPTY"  # vLLM doesn't require real API key for local servers
+VLLM_CHAT_MODEL = "your-chat-model-name"  # Replace with your actual chat model name
+
+VLLM_EMBEDDING_BASE_URL = "http://localhost:8001/v1"
+VLLM_EMBEDDING_API_KEY = "EMPTY"  # vLLM doesn't require real API key for local servers  
+VLLM_EMBEDDING_MODEL = "your-embedding-model-name"  # Replace with your actual embedding model name
+EMBEDDING_DIMENSION = 768  # Update this to match your embedding model's dimension
+
 # Ensure working directory exists
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -188,30 +311,33 @@ if not os.path.exists(WORKING_DIR):
 async def llm_model_func(
     prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
 ) -> str:
+    """LLM function using vLLM chat endpoint"""
     return await openai_complete_if_cache(
-        "solar-mini",
-        prompt,
+        model=VLLM_CHAT_MODEL,
+        prompt=prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
-        api_key=os.getenv("UPSTAGE_API_KEY"),
-        base_url="https://api.upstage.ai/v1/solar",
+        api_key=VLLM_CHAT_API_KEY,
+        base_url=VLLM_CHAT_BASE_URL,
         **kwargs
     )
 
 async def embedding_func(texts: list[str]) -> np.ndarray:
+    """Embedding function using vLLM embedding endpoint"""
     return await openai_embed(
         texts,
-        model="solar-embedding-1-large-query",
-        api_key=os.getenv("UPSTAGE_API_KEY"),
-        base_url="https://api.upstage.ai/v1/solar"
+        model=VLLM_EMBEDDING_MODEL,
+        api_key=VLLM_EMBEDDING_API_KEY,
+        base_url=VLLM_EMBEDDING_BASE_URL
     )
 
 async def initialize_rag():
+    """Initialize LightRAG with vLLM endpoints"""
     rag = LightRAG(
         working_dir=WORKING_DIR,
         llm_model_func=llm_model_func,
         embedding_func=EmbeddingFunc(
-            embedding_dim=4096,
+            embedding_dim=EMBEDDING_DIMENSION,  # Update this to match your embedding model
             max_token_size=8192,
             func=embedding_func
         )
@@ -220,42 +346,132 @@ async def initialize_rag():
     await initialize_pipeline_status()
     return rag
 
-async def main():
-    """Main function to demonstrate LightRAG usage"""
+async def test_vllm_connectivity():
+    """Test if vLLM servers are reachable"""
+    print("🔍 Testing vLLM server connectivity...")
+    
+    import aiohttp
+    
+    # Test chat server
     try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{VLLM_CHAT_BASE_URL.replace('/v1', '')}/health") as resp:
+                if resp.status == 200:
+                    print("✅ Chat server (port 8000) is reachable")
+                else:
+                    print(f"⚠️ Chat server responded with status {resp.status}")
+                    return False
+    except Exception as e:
+        print(f"❌ Chat server not reachable: {e}")
+        return False
+    
+    # Test embedding server
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{VLLM_EMBEDDING_BASE_URL.replace('/v1', '')}/health") as resp:
+                if resp.status == 200:
+                    print("✅ Embedding server (port 8001) is reachable")
+                else:
+                    print(f"⚠️ Embedding server responded with status {resp.status}")
+                    return False
+    except Exception as e:
+        print(f"❌ Embedding server not reachable: {e}")
+        return False
+    
+    return True
+
+async def main():
+    """Main function to demonstrate LightRAG usage with vLLM"""
+    try:
+        # Print configuration
+        print("🚀 Starting LightRAG with vLLM")
+        print("=" * 50)
+        print(f"Chat server: {VLLM_CHAT_BASE_URL}")
+        print(f"Chat model: {VLLM_CHAT_MODEL}")
+        print(f"Embedding server: {VLLM_EMBEDDING_BASE_URL}")
+        print(f"Embedding model: {VLLM_EMBEDDING_MODEL}")
+        print(f"Working directory: {WORKING_DIR}")
+        print("=" * 50)
+        
+        # Test server connectivity
+        if not await test_vllm_connectivity():
+            print("\n❌ Cannot connect to vLLM servers!")
+            print("\n💡 Make sure your vLLM servers are running:")
+            print("   # For chat model:")
+            print("   vllm serve <your-chat-model> --port 8000")
+            print("   # For embedding model:")
+            print("   vllm serve <your-embedding-model> --port 8001")
+            return
+        
         # Initialize RAG instance
+        print("\n🔧 Initializing LightRAG...")
         rag = await initialize_rag()
+        print("✅ LightRAG initialized successfully!")
         
         # Insert some sample text
-        sample_text = "Python is a high-level programming language created by Guido van Rossum. It's widely used for web development, data science, and artificial intelligence."
+        sample_text = """
+        Python is a high-level, interpreted programming language created by Guido van Rossum 
+        and first released in 1991. It's widely used for web development, data science, 
+        artificial intelligence, machine learning, automation, and scientific computing.
+        
+        Key features of Python include:
+        - Simple and readable syntax
+        - Extensive standard library
+        - Large ecosystem of third-party packages
+        - Cross-platform compatibility
+        - Strong community support
+        
+        Popular Python frameworks include Django and Flask for web development, 
+        TensorFlow and PyTorch for machine learning, and pandas and NumPy for data analysis.
+        """
+        
+        print("\n📝 Inserting sample text...")
         rag.insert(sample_text)
+        print("✅ Text inserted successfully!")
         
         # Perform different types of queries
-        query = "What is Python used for?"
+        query = "What is Python used for and what are its key features?"
+        
+        print(f"\n❓ Query: {query}")
+        print("\n" + "="*50)
         
         # Hybrid search (recommended)
-        print("=== Hybrid Search ===")
+        print("🔍 Hybrid Search:")
         result = await rag.query(query, param=QueryParam(mode="hybrid"))
-        print(result)
+        print(f"📝 {result}")
         
-        print("\n=== Local Search ===")
+        print("\n" + "-"*30)
+        print("🔍 Local Search:")
         result = await rag.query(query, param=QueryParam(mode="local"))
-        print(result)
+        print(f"📝 {result}")
         
-        print("\n=== Global Search ===")
+        print("\n" + "-"*30)
+        print("🔍 Global Search:")
         result = await rag.query(query, param=QueryParam(mode="global"))
-        print(result)
+        print(f"📝 {result}")
+        
+        print("\n" + "-"*30)
+        print("🔍 Mix Search:")
+        result = await rag.query(query, param=QueryParam(mode="mix"))
+        print(f"📝 {result}")
         
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"❌ An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if 'rag' in locals():
             await rag.finalize_storages()
+            print("\n✅ LightRAG finalized successfully!")
 
 if __name__ == "__main__":
-    # Make sure to set your UPSTAGE_API_KEY environment variable before running
-    if not os.getenv("UPSTAGE_API_KEY"):
-        print("Error: Please set the UPSTAGE_API_KEY environment variable")
+    # Check configuration
+    if VLLM_CHAT_MODEL == "your-chat-model-name" or VLLM_EMBEDDING_MODEL == "your-embedding-model-name":
+        print("⚠️  IMPORTANT: Update the model names before running!")
+        print(f"   Edit VLLM_CHAT_MODEL: '{VLLM_CHAT_MODEL}'")
+        print(f"   Edit VLLM_EMBEDDING_MODEL: '{VLLM_EMBEDDING_MODEL}'")
+        print(f"   Edit EMBEDDING_DIMENSION: {EMBEDDING_DIMENSION}")
+        print("   Set these to match your deployed vLLM models.")
         exit(1)
     
     asyncio.run(main())
