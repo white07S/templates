@@ -1,0 +1,459 @@
+# Complete PostgreSQL Setup Guide for LightRAG
+
+This guide will help you set up PostgreSQL locally with all required extensions for LightRAG's complete storage backend.
+
+## 🎯 What We're Installing
+
+- **PostgreSQL** (main database)
+- **pgvector** (for vector storage)
+- **Apache AGE** (for graph storage)
+- **Required Python packages**
+
+## 📋 Prerequisites
+
+- Operating System: Linux, macOS, or Windows
+- Python 3.9+ installed
+- Administrative/sudo privileges
+
+## 🐧 Linux (Ubuntu/Debian) Setup
+
+### Step 1: Install PostgreSQL
+
+```bash
+# Update package list
+sudo apt update
+
+# Install PostgreSQL and additional packages
+sudo apt install postgresql postgresql-contrib postgresql-server-dev-all build-essential
+
+# Start and enable PostgreSQL
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+# Check PostgreSQL version (should be 12+)
+psql --version
+```
+
+### Step 2: Install pgvector Extension
+
+```bash
+# Install git and build tools
+sudo apt install git cmake
+
+# Clone pgvector repository
+cd /tmp
+git clone --branch v0.5.1 https://github.com/pgvector/pgvector.git
+cd pgvector
+
+# Build and install pgvector
+make
+sudo make install
+
+# Verify installation
+sudo -u postgres psql -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+### Step 3: Install Apache AGE Extension
+
+```bash
+# Install dependencies for AGE
+sudo apt install flex bison
+
+# Clone Apache AGE repository
+cd /tmp
+git clone https://github.com/apache/age.git
+cd age
+
+# Build and install AGE
+make install
+
+# If you get permission errors, try:
+sudo make install
+```
+
+## 🍎 macOS Setup
+
+### Step 1: Install PostgreSQL using Homebrew
+
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install PostgreSQL
+brew install postgresql@15
+
+# Start PostgreSQL service
+brew services start postgresql@15
+
+# Add PostgreSQL to PATH
+echo 'export PATH="/opt/homebrew/opt/postgresql@15/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Step 2: Install pgvector
+
+```bash
+# Install pgvector via Homebrew
+brew install pgvector
+
+# Or build from source:
+cd /tmp
+git clone --branch v0.5.1 https://github.com/pgvector/pgvector.git
+cd pgvector
+make
+make install
+```
+
+### Step 3: Install Apache AGE
+
+```bash
+# Install dependencies
+brew install flex bison
+
+# Clone and build AGE
+cd /tmp
+git clone https://github.com/apache/age.git
+cd age
+make install
+```
+
+## 🪟 Windows Setup
+
+### Option 1: Using PostgreSQL Windows Installer
+
+1. **Download PostgreSQL Installer**
+   - Go to https://www.postgresql.org/download/windows/
+   - Download PostgreSQL 15+ installer
+
+2. **Install PostgreSQL**
+   - Run installer as Administrator
+   - Remember the password you set for 'postgres' user
+   - Include pgAdmin 4 and command line tools
+
+3. **Install Build Tools**
+   - Install Visual Studio Build Tools or Visual Studio Community
+   - Install Git for Windows
+
+### Option 2: Using Docker (Recommended for Windows)
+
+```bash
+# Install Docker Desktop first, then run:
+docker run -d \
+  --name lightrag-postgres \
+  -e POSTGRES_PASSWORD=your_password \
+  -e POSTGRES_DB=lightrag \
+  -p 5432:5432 \
+  -v postgres_data:/var/lib/postgresql/data \
+  ankane/pgvector
+
+# This gives you PostgreSQL + pgvector ready to use
+```
+
+## 🔧 Database Configuration
+
+### Step 1: Create Database and User
+
+```bash
+# Connect to PostgreSQL as postgres user
+sudo -u postgres psql
+
+# Or on macOS/Windows:
+psql -U postgres -h localhost
+```
+
+```sql
+-- Create database for LightRAG
+CREATE DATABASE lightrag;
+
+-- Create user for LightRAG
+CREATE USER lightrag_user WITH PASSWORD 'secure_password_here';
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE lightrag TO lightrag_user;
+ALTER USER lightrag_user CREATEDB;
+
+-- Connect to the lightrag database
+\c lightrag
+
+-- Create required extensions
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS age;
+
+-- Load AGE into search path
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+
+-- Verify extensions are installed
+\dx
+
+-- Exit psql
+\q
+```
+
+### Step 2: Configure PostgreSQL Settings
+
+Edit PostgreSQL configuration file:
+
+```bash
+# Find and edit postgresql.conf
+sudo nano /etc/postgresql/15/main/postgresql.conf
+
+# Or find config location:
+sudo -u postgres psql -c "SHOW config_file;"
+```
+
+Add/modify these settings in `postgresql.conf`:
+
+```conf
+# Memory settings for better performance
+shared_buffers = 256MB
+effective_cache_size = 1GB
+work_mem = 16MB
+maintenance_work_mem = 256MB
+
+# Connection settings
+max_connections = 100
+listen_addresses = 'localhost'
+port = 5432
+
+# Enable logging for debugging
+log_statement = 'all'
+log_duration = on
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+```
+
+Restart PostgreSQL:
+
+```bash
+sudo systemctl restart postgresql
+# or on macOS:
+brew services restart postgresql@15
+```
+
+## 🐍 Python Dependencies
+
+Install required Python packages:
+
+```bash
+# Install LightRAG with PostgreSQL support
+pip install lightrag[postgres]
+
+# Or install individual packages:
+pip install lightrag psycopg2-binary sqlalchemy
+
+# For graph operations
+pip install networkx
+
+# Optional: install pgcli for better PostgreSQL CLI
+pip install pgcli
+```
+
+## ⚙️ Configure LightRAG .env File
+
+Update your `.env` file with these settings:
+
+```env
+############################
+### Data storage selection
+############################
+LIGHTRAG_KV_STORAGE=PGKVStorage
+LIGHTRAG_DOC_STATUS_STORAGE=PGDocStatusStorage
+LIGHTRAG_GRAPH_STORAGE=PGGraphStorage
+LIGHTRAG_VECTOR_STORAGE=PGVectorStorage
+
+### PostgreSQL Configuration
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=lightrag_user
+POSTGRES_PASSWORD=secure_password_here
+POSTGRES_DATABASE=lightrag
+POSTGRES_MAX_CONNECTIONS=12
+
+### Optional PostgreSQL SSL Configuration
+# POSTGRES_SSL_MODE=require
+# POSTGRES_SSL_CERT=/path/to/client-cert.pem
+# POSTGRES_SSL_KEY=/path/to/client-key.pem
+```
+
+## 🧪 Test Your Setup
+
+### Step 1: Test Database Connection
+
+```python
+# test_connection.py
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+try:
+    conn = psycopg2.connect(
+        host="localhost",
+        port=5432,
+        database="lightrag",
+        user="lightrag_user",
+        password="secure_password_here"
+    )
+    
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # Test basic connection
+        cur.execute("SELECT version();")
+        version = cur.fetchone()
+        print(f"✅ PostgreSQL connection successful: {version['version']}")
+        
+        # Test pgvector extension
+        cur.execute("SELECT * FROM pg_extension WHERE extname = 'vector';")
+        if cur.fetchone():
+            print("✅ pgvector extension installed")
+        else:
+            print("❌ pgvector extension missing")
+        
+        # Test AGE extension
+        cur.execute("SELECT * FROM pg_extension WHERE extname = 'age';")
+        if cur.fetchone():
+            print("✅ Apache AGE extension installed")
+        else:
+            print("❌ Apache AGE extension missing")
+            
+    conn.close()
+    print("✅ All database tests passed!")
+    
+except Exception as e:
+    print(f"❌ Database connection failed: {e}")
+```
+
+### Step 2: Test LightRAG with PostgreSQL
+
+```python
+# test_lightrag.py
+import os
+import asyncio
+from lightrag import LightRAG
+from lightrag.llm.openai import openai_complete_if_cache, openai_embed
+from lightrag.utils import EmbeddingFunc
+from lightrag.kg.shared_storage import initialize_pipeline_status
+
+# Set environment variables
+os.environ["LIGHTRAG_KV_STORAGE"] = "PGKVStorage"
+os.environ["LIGHTRAG_DOC_STATUS_STORAGE"] = "PGDocStatusStorage"
+os.environ["LIGHTRAG_GRAPH_STORAGE"] = "PGGraphStorage"
+os.environ["LIGHTRAG_VECTOR_STORAGE"] = "PGVectorStorage"
+
+os.environ["POSTGRES_HOST"] = "localhost"
+os.environ["POSTGRES_PORT"] = "5432"
+os.environ["POSTGRES_USER"] = "lightrag_user"
+os.environ["POSTGRES_PASSWORD"] = "secure_password_here"
+os.environ["POSTGRES_DATABASE"] = "lightrag"
+
+async def test_lightrag():
+    try:
+        # Initialize LightRAG
+        rag = LightRAG(
+            working_dir="./test_working_dir",
+            llm_model_func=lambda prompt, **kwargs: "Test response",
+            embedding_func=EmbeddingFunc(
+                embedding_dim=1536,
+                max_token_size=8192,
+                func=lambda texts: [[0.1] * 1536 for _ in texts]  # Mock embedding
+            ),
+        )
+        
+        # Initialize storages
+        await rag.initialize_storages()
+        await initialize_pipeline_status()
+        
+        print("✅ LightRAG initialization successful!")
+        print("✅ All PostgreSQL storages connected!")
+        
+        # Test basic insertion
+        await rag.insert("This is a test document to verify the setup works correctly.")
+        print("✅ Document insertion successful!")
+        
+        # Cleanup
+        await rag.finalize_storages()
+        
+    except Exception as e:
+        print(f"❌ LightRAG test failed: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(test_lightrag())
+```
+
+## 🚀 Run Tests
+
+```bash
+# Test database connection
+python test_connection.py
+
+# Test LightRAG setup
+python test_lightrag.py
+```
+
+## 🛠️ Troubleshooting
+
+### Common Issues and Solutions
+
+**1. Permission Denied Errors**
+```bash
+# Fix PostgreSQL permissions
+sudo chmod 755 /var/lib/postgresql
+sudo chown -R postgres:postgres /var/lib/postgresql
+```
+
+**2. AGE Extension Not Loading**
+```sql
+-- In PostgreSQL, run:
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+```
+
+**3. Python Connection Errors**
+```bash
+# Install additional PostgreSQL dev packages
+sudo apt install libpq-dev  # Ubuntu/Debian
+brew install libpq          # macOS
+```
+
+**4. Port Already in Use**
+```bash
+# Check what's using port 5432
+sudo lsof -i :5432
+# Kill conflicting process or change PostgreSQL port
+```
+
+### Performance Optimization
+
+Add these to `postgresql.conf` for better performance:
+
+```conf
+# Increase memory for vector operations
+shared_buffers = 512MB
+effective_cache_size = 2GB
+random_page_cost = 1.1
+effective_io_concurrency = 200
+
+# For AGE graph operations
+work_mem = 32MB
+max_parallel_workers_per_gather = 4
+```
+
+## ✅ Verification Checklist
+
+- [ ] PostgreSQL 12+ installed and running
+- [ ] pgvector extension installed and enabled
+- [ ] Apache AGE extension installed and enabled
+- [ ] Database and user created with proper permissions
+- [ ] Python packages installed (lightrag, psycopg2-binary)
+- [ ] .env file configured correctly
+- [ ] Connection test passes
+- [ ] LightRAG initialization test passes
+
+## 🎉 You're Ready!
+
+Your PostgreSQL setup is now complete and ready for production use with LightRAG. This gives you:
+
+- **Unified storage**: Everything in one database
+- **ACID compliance**: Strong data consistency
+- **Mature tooling**: Excellent backup, monitoring, and management tools
+- **Scalability**: Handle millions of documents and vectors
+- **Cost-effective**: No separate vector database licensing
+
+Start LightRAG with your configured .env file and enjoy your PostgreSQL-powered RAG system!
