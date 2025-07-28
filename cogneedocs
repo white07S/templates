@@ -1,3 +1,8 @@
+from lightrag import LightRAG, QueryParam
+from lightrag.llm.openai import openai_embed, gpt_4o_mini_complete
+from lightrag.kg.shared_storage import initialize_pipeline_status
+import asyncio, os
+
 async def run_structured_query():
     # 1. Initialize
     WORKING_DIR = "./rag_storage"
@@ -29,3 +34,5 @@ async def run_structured_query():
 
     # 4. Clean up
     await rag.finalize_storages()
+
+asyncio.run(run_structured_query())
