@@ -1,0 +1,279 @@
+# UBS GCRG Scenario Landing Page - Technical Requirements Document
+
+## Project Overview
+
+### Application Purpose
+The UBS GCRG (Group Credit Risk and Governance) Scenario platform is an advanced agentic AI system designed for operational risk scenario generation and management. The platform leverages local Large Language Models (LLMs) to provide secure, compliant risk scenario analysis within UBS infrastructure.
+
+### Core Functionality
+1. **Scenario Library Management**: Comprehensive tracking and versioning of risk scenarios across UBS taxonomy, divisions, and units
+2. **Agentic Scenario Generation**: Multi-agent AI system for intelligent scenario creation and validation
+3. **Local AI Processing**: Complete data sovereignty using Qwen and Mistral model families
+
+---
+
+## Design System & Brand Guidelines
+
+### Color Palette
+```css
+/* PRIMARY COLORS */
+--ubs-black: #000000;
+--ubs-red: #e60000;
+--ubs-white: #ffffff;
+
+/* SECONDARY PREFERRED */
+--ubs-red-web: #da0000;
+--ubs-bordeaux1: #bd000c;
+--ubs-bordeaux50: #b03974;
+--ubs-sand: #cfbd9b;
+--ubs-caramel: #cfbd9b;
+--ubs-ginger: #e05bd0;
+--ubs-chocolate: #4d3c2f;
+--ubs-clay: #7b6b59;
+--ubs-mouse: #beb29e;
+--ubs-curry: #e5b01c;
+--ubs-amber-web: #f2c551;
+--ubs-warm5: #5b5e5d;
+--ubs-honey: #edc860;
+--ubs-straw: #f2d88e;
+--ubs-chestnut-web: #ba0000;
+--ubs-chestnut: #a43725;
+--ubs-terracotta: #c07156;
+--ubs-cinnamon: #e6b644; /* Note: Fixed typo from original */
+```
+
+### Design Principles
+- **Theme**: Light mode exclusively
+- **Geometry**: slight round corner, no massive roundness
+- **Typography**: Clean, professional, banking-grade readability
+- **Layout**: Grid-based, structured, institutional feel
+- **Animation**: Subtle, professional micro-interactions
+
+---
+
+## Page Architecture & Component Requirements
+
+### 1. Header Navigation
+**Purpose**: Primary navigation and brand identification
+
+**Content Requirements**:
+- Title: "GCRG Scenario"
+- Navigation: Hash router implementation
+  - Home
+  - Scenario Library  
+  - Scenario Generator
+
+**Recommended Aceternity Components**:
+1. **[Floating Navbar](https://ui.aceternity.com/components/floating-navbar)** - Clean, professional navigation that adapts to scroll behavior
+2. **[Resizable Navbar](https://ui.aceternity.com/components/navbar)** - Dynamic width adjustment for optimal space utilization
+
+**Technical Specifications**:
+- Responsive design for desktop/tablet/mobile
+- Active state indicators for current route
+- UBS brand compliance with primary color scheme
+
+---
+
+### 2. Hero Section
+**Purpose**: Primary value proposition and brand positioning
+
+**Content Requirements**:
+- **Primary Headline**: "AI-Powered Risk Scenario Intelligence" (Enhanced from "Agentic Scenario Generator")
+- **Subtitle**: "by UBS Quantitative Solutions"
+- **Description**: Advanced multi-agent AI system for operational risk scenario generation, analysis, and management
+- **Call-to-Action**: Primary action button leading to Scenario Generator
+
+**Recommended Aceternity Components**:
+1. **[Hero Sections](https://ui.aceternity.com/components/hero-sections)** - Professional, banking-appropriate hero layouts
+2. **[Hero Parallax](https://ui.aceternity.com/components/hero-parallax)** - Sophisticated scroll-based animations for engagement
+
+**Technical Specifications**:
+- Viewport height optimization
+- Professional imagery or abstract geometric patterns
+- Clear hierarchy with UBS typography standards
+
+---
+
+### 3. Statistics Dashboard Section
+**Purpose**: Key performance indicators and platform metrics
+
+**Content Requirements**:
+- **Primary Metric**: Total scenarios in library
+- **Breakdown Dimensions**:
+  - By Taxonomy (Operational, Credit, Market, etc.)
+  - By Generation Method (AI-Generated vs Human-Created vs Legacy)
+  - By Status (Live vs In-Validation)
+- **Visual Representation**: Clean, data-driven cards with numerical emphasis
+
+**Recommended Aceternity Components**:
+1. **[Bento Grid](https://ui.aceternity.com/components/bento-grid)** - Structured grid layout perfect for organized data presentation
+2. **[Cards](https://ui.aceternity.com/components/cards)** - Clean metric containers with subtle hover interactions
+
+**Technical Specifications**:
+- Real-time data integration capability
+- Responsive grid system
+- Clear visual hierarchy for metric importance
+
+---
+
+### 4. Features Showcase Section
+**Purpose**: Platform capabilities and value proposition
+
+**Content Requirements**:
+- **Scenario Library Management**
+  - Multi-dimensional taxonomy tracking
+  - Historical change versioning
+  - Cross-divisional scenario sharing
+  
+- **Multi-Agent AI System**
+  - Data Analyst Agent: Historical loss analysis
+  - Scenario Modeler Agent: Predictive scenario creation
+  - Compliance Verification Agent: Regulatory alignment
+  - Storyline Designer Agent: Narrative development
+  - Control Environment Tester Agent: Control failure analysis
+  
+- **Local AI Processing**
+  - Complete data sovereignty
+  - Qwen and Mistral model integration
+  - Human-in-the-loop feedback systems
+
+**Recommended Aceternity Components**:
+1. **[Feature Sections](https://ui.aceternity.com/components/feature-sections)** - Specialized layouts for feature presentation
+2. **[Wobble Card](https://ui.aceternity.com/components/wobble-card)** - Interactive feature cards with professional micro-animations
+
+**Technical Specifications**:
+- Icon integration for each feature
+- Progressive disclosure of technical details
+- Interactive elements for user engagement
+
+---
+
+### 5. Compliance & Disclaimer Section
+**Purpose**: Legal compliance and operational transparency
+
+**Content Requirements**:
+- **Data Processing**: "All processing utilizes local LLMs within UBS infrastructure"
+- **Feedback Recording**: "User interactions and feedback are recorded for model improvement"
+- **Data Classification**: "No Confidential Information Data (CID) is processed by AI systems"
+- **User Responsibility**: "Users maintain sole responsibility for AI output utilization and compliance with UBS policies"
+- **Model Governance**: Clear ownership and responsibility chain
+
+**Recommended Aceternity Components**:
+1. **[Cards](https://ui.aceternity.com/components/cards)** - Professional content containers for policy information
+2. **[Spotlight](https://ui.aceternity.com/components/spotlight)** - Emphasis component for critical compliance information
+
+**Technical Specifications**:
+- Clear typography hierarchy
+- Legal-appropriate formatting
+- Easy scanning and comprehension
+
+---
+
+### 6. Contact & Governance Section
+**Purpose**: Model governance and stakeholder identification
+
+**Content Requirements**:
+- **Model Sponsor**: Tanja Weiher
+- **Model Owner**: Anais Dangel  
+- **Development Team**: Eric Cope, Pablo Mera, Preetam Sharma
+- **Role Definitions**: Clear responsibility matrix
+- **Contact Protocols**: Escalation and support procedures
+
+**Recommended Aceternity Components**:
+1. **[Cards](https://ui.aceternity.com/components/cards)** - Professional team member presentation
+2. **[Animated Testimonials](https://ui.aceternity.com/components/animated-testimonials)** - Team member cards with role emphasis
+
+**Technical Specifications**:
+- Professional headshots or role-based avatars
+- Clear role hierarchy
+- Contact information integration
+
+---
+
+### 7. Footer Section
+**Purpose**: Support information and additional resources
+
+**Content Requirements**:
+- **Primary Support Contact**: preetam.sharma@ubs.com
+- **Support Scope**: 
+  - Access management requests
+  - Bug reporting and resolution
+  - Design change requests  
+  - Feature addition proposals
+- **Additional Resources**: Documentation links, help resources
+
+**Recommended Aceternity Components**:
+1. **[Grid and Dot Backgrounds](https://ui.aceternity.com/components/grid-and-dot-backgrounds)** - Subtle background pattern for footer distinction
+2. **[Cards](https://ui.aceternity.com/components/cards)** - Organized support information presentation
+
+**Technical Specifications**:
+- Minimal visual footprint
+- Clear contact protocols
+- Professional support channel identification
+
+---
+
+## Technical Implementation Specifications
+
+### Frontend Framework
+- **React**: Component-based architecture
+- **Tailwind CSS**: Utility-first styling with UBS color customization
+- **React Router**: Hash-based routing for SPA navigation
+
+### Component Architecture
+- **Modular Design**: Reusable components aligned with UBS design system
+- **Accessibility**: WCAG 2.1 AA compliance for banking applications
+- **Performance**: Optimized loading and interaction patterns
+
+### Integration Requirements
+- **API Integration**: RESTful endpoints for statistics and content
+- **Authentication**: UBS SSO integration capability
+- **Monitoring**: User interaction analytics and performance monitoring
+
+### Browser Support
+- **Primary**: Chrome, Edge, Firefox (latest 2 versions)
+- **Secondary**: Safari (latest version)
+- **Mobile**: Responsive design for tablet access
+
+---
+
+## Quality Assurance & Compliance
+
+### Security Requirements
+- **Data Classification**: No CID data exposure
+- **Access Control**: Role-based access integration
+- **Audit Trail**: User interaction logging
+
+### Performance Benchmarks
+- **Page Load**: < 3 seconds initial load
+- **Interaction Response**: < 200ms for UI interactions
+- **Accessibility**: Full keyboard navigation support
+
+### Testing Strategy
+- **Unit Testing**: Component-level validation
+- **Integration Testing**: API and routing validation  
+- **User Acceptance Testing**: Stakeholder validation process
+
+---
+
+## Delivery Timeline & Milestones
+
+### Phase 1: Foundation (Week 1-2)
+- Design system implementation
+- Header and navigation
+- Hero section development
+
+### Phase 2: Content Sections (Week 3-4)
+- Statistics dashboard
+- Features showcase
+- Compliance sections
+
+### Phase 3: Integration & Polish (Week 5-6)
+- Contact section
+- Footer implementation
+- Performance optimization
+- User acceptance testing
+
+---
+
+*This document serves as the comprehensive technical specification for the UBS GCRG Scenario landing page development. All implementations must adhere to UBS brand guidelines, security requirements, and regulatory compliance standards.*
