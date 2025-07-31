@@ -1,0 +1,233 @@
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import re
+from typing import AsyncGenerator
+
+app = FastAPI()
+
+# 1) Configure your allowed users here
+ALLOWED_EMAILS = {
+    "alice@example.com",
+    "bob@example.com",
+}
+
+# 2) How long to wait (in seconds) for the user to complete login
+AZ_LOGIN_TIMEOUT = 300
+
+
+async def _az_login_sse(request: Request) -> AsyncGenerator[str, None]:
+    """
+    Runs `az login --use-device-code --output json` as a subprocess,
+    parses out the device code + URL, yields them immediately, then
+    waits for completion and yields the final auth result.
+    """
+    # spawn the Azure CLI in device-code mode
+    proc = await asyncio.create_subprocess_exec(
+        "az", "login", "--use-device-code", "--output", "json",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    user_code = None
+    verification_uri = None
+    json_lines = []
+    seen_first_json = False
+
+    try:
+        # 1) read lines until we’ve emitted code+url
+        while True:
+            # if client has disconnected, kill the process and stop
+            if await request.is_disconnected():
+                proc.kill()
+                return
+
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", errors="ignore").strip()
+
+            if not seen_first_json:
+                # look for the "open browser at https://... and enter code XXXX" message
+                code_match = re.search(r"code\s+([A-Z0-9\-]+)", text)
+                url_match = re.search(r"(https?://\S+)", text)
+                if code_match:
+                    user_code = code_match.group(1)
+                if url_match:
+                    verification_uri = url_match.group(1)
+                if user_code and verification_uri:
+                    payload = {"user_code": user_code, "verification_uri": verification_uri}
+                    # SSE message: a JSON blob
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    seen_first_json = True
+                    continue
+
+                # maybe the JSON result is starting on this line
+                if text.startswith("[") or text.startswith("{"):
+                    seen_first_json = True
+
+            if seen_first_json:
+                # buffer all JSON lines for later parsing
+                json_lines.append(text)
+
+        # 2) wait (with timeout) for the CLI to finish
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=AZ_LOGIN_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            yield "data: " + json.dumps({"error": "Login timed out"}) + "\n\n"
+            return
+
+        # if we never got any JSON, bail
+        if not json_lines:
+            yield "data: " + json.dumps({"error": "No JSON from az login"}) + "\n\n"
+            return
+
+        # parse the JSON array
+        try:
+            accounts = json.loads("\n".join(json_lines))
+        except json.JSONDecodeError:
+            yield "data: " + json.dumps({"error": "Malformed JSON from az login"}) + "\n\n"
+            return
+
+        if not isinstance(accounts, list) or not accounts:
+            yield "data: " + json.dumps({"error": "Unexpected login response"}) + "\n\n"
+            return
+
+        # extract the email
+        email = accounts[0].get("user", {}).get("name")
+        if not email:
+            yield "data: " + json.dumps({"error": "Email not found in response"}) + "\n\n"
+            return
+
+        # check against our whitelist
+        if email in ALLOWED_EMAILS:
+            result = {
+                "authorized": True,
+                "email": email,
+                "message": f"Authorization successful, welcome {email}"
+            }
+        else:
+            result = {
+                "authorized": False,
+                "email": email,
+                "message": "Unauthorized user"
+            }
+
+        # final SSE message
+        yield f"data: {json.dumps(result)}\n\n"
+
+    finally:
+        # ensure process is cleaned up
+        if proc.returncode is None:
+            proc.kill()
+
+
+@app.get("/authorize")
+async def authorize(request: Request):
+    """
+    Server‐Sent Events endpoint. Client should open an EventSource
+    on /authorize and expect two messages:
+      1) { user_code, verification_uri }
+      2) { authorized: bool, email, message }
+    """
+    return StreamingResponse(
+        _az_login_sse(request),
+        media_type="text/event-stream"
+    )
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azure Device-Code Auth Test</title>
+  <!-- Bootstrap CSS -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css"
+    integrity="sha384-GTV6hZq5Gq6EEH7+8iX9SBMqCkp8PnrV5E08eyOJ4km3l4p3BivkaJ2CredEilrF"
+    crossorigin="anonymous"
+  >
+</head>
+<body>
+  <div class="container py-5">
+    <h1 class="mb-4">Device-Code Authorization</h1>
+    <button id="authorizeBtn" class="btn btn-primary mb-3">Start Authorization</button>
+    <div id="output"></div>
+  </div>
+
+  <!-- jQuery -->
+  <script
+    src="https://code.jquery.com/jquery-3.6.0.min.js"
+    integrity="sha256-/xUj+3OJ+YRFYf2EvY3gWJYPQ8X+Ley4zF2rYpj/UhU="
+    crossorigin="anonymous">
+  </script>
+  <!-- Bootstrap Bundle (includes Popper) -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-Fy6S3B9q64WdZWQUiU+q4/2LcWshauepKnuL3im2yVqyZkpKsVrKJ0al2Q7b8K6B"
+    crossorigin="anonymous">
+  </script>
+
+  <script>
+    $(function() {
+      $('#authorizeBtn').on('click', function() {
+        var $btn = $(this);
+        var $out = $('#output').empty();
+        $btn.prop('disabled', true).text('Waiting for login…');
+
+        // point to your local FastAPI server
+        var es = new EventSource('http://localhost:8000/authorize');
+
+        es.onmessage = function(event) {
+          try {
+            var data = JSON.parse(event.data);
+          } catch(err) {
+            console.error('Invalid JSON:', event.data);
+            return;
+          }
+
+          if (data.user_code && data.verification_uri) {
+            // first message: show code + link
+            var html = `
+              <div class="alert alert-info">
+                <p><strong>Open this URL:</strong><br>
+                   <a href="${data.verification_uri}" target="_blank">
+                     ${data.verification_uri}
+                   </a>
+                </p>
+                <p><strong>And enter code:</strong> <code>${data.user_code}</code></p>
+              </div>
+            `;
+            $out.append(html);
+
+          } else if (data.authorized !== undefined) {
+            // second message: final result
+            var cls = data.authorized ? 'alert-success' : 'alert-danger';
+            var msg = data.message + (data.email ? ' ('+data.email+')' : '');
+            $out.append(
+              `<div class="alert ${cls}">${msg}</div>`
+            );
+            es.close();
+            $btn.prop('disabled', false).text('Start Authorization');
+          }
+
+        };
+
+        es.onerror = function(err) {
+          console.error('SSE error', err);
+          $out.append(
+            '<div class="alert alert-warning">Connection lost or error occurred.</div>'
+          );
+          es.close();
+          $btn.prop('disabled', false).text('Start Authorization');
+        };
+      });
+    });
+  </script>
+</body>
+</html>
