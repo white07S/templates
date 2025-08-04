@@ -42,6 +42,8 @@ class VLLMService:
             env['CUDA_VISIBLE_DEVICES'] = self.cuda_device
             
         logger.info(f"Starting {self.name} service on port {self.port}...")
+        if self.cuda_device:
+            logger.info(f"Using CUDA device: {self.cuda_device}")
         logger.info(f"Command: {' '.join(self.command)}")
         
         self.process = subprocess.Popen(
@@ -124,6 +126,9 @@ class VLLMReverseProxy:
         elif path == '/health':
             # Return health check for proxy itself
             return None
+        elif path.startswith('/v1/models'):
+            # Models endpoint - route to reasoning by default
+            return self.services.get('reasoning')
         else:
             # Default to reasoning service for other endpoints
             return self.services.get('reasoning')
@@ -210,17 +215,24 @@ class VLLMReverseProxy:
                 status=502
             )
             
-    async def start(self):
-        """Start all services and the proxy server."""
-        # Start all vLLM services
-        start_tasks = []
-        for name, service in self.services.items():
-            await service.start()
-            start_tasks.append(service.wait_until_ready())
-            
-        # Wait for all services to be ready
-        logger.info("Waiting for all services to be ready...")
-        await asyncio.gather(*start_tasks)
+    async def start_services_sequentially(self, reasoning_service: VLLMService, embeddings_service: VLLMService):
+        """Start services sequentially - embeddings only after reasoning is ready."""
+        # Start reasoning service first
+        logger.info("Starting reasoning service first...")
+        await reasoning_service.start()
+        await reasoning_service.wait_until_ready()
+        
+        # Only start embeddings service after reasoning is ready
+        logger.info("Reasoning service is ready. Now starting embeddings service...")
+        await embeddings_service.start()
+        await embeddings_service.wait_until_ready()
+        
+        logger.info("All services are ready!")
+        
+    async def start(self, reasoning_service: VLLMService, embeddings_service: VLLMService):
+        """Start services sequentially and then the proxy server."""
+        # Start services sequentially
+        await self.start_services_sequentially(reasoning_service, embeddings_service)
         
         # Start proxy server
         logger.info(f"Starting reverse proxy server on port {self.proxy_port}...")
@@ -234,6 +246,7 @@ class VLLMReverseProxy:
         logger.info("  - /v1/completions - Text generation (reasoning model)")
         logger.info("  - /v1/chat/completions - Chat completions (reasoning model)")
         logger.info("  - /v1/embeddings - Text embeddings")
+        logger.info("  - /v1/models - List available models")
         logger.info("  - /health - Health check for proxy and services")
         
     def stop(self):
@@ -251,35 +264,52 @@ async def main():
     EMBEDDINGS_PORT = 7002
     PROXY_PORT = 8888
     
+    # Optional: Additional vLLM arguments
+    REASONING_EXTRA_ARGS = [
+        # Add any additional arguments for reasoning model here
+        # "--max-model-len", "8192",
+        # "--gpu-memory-utilization", "0.9",
+    ]
+    
+    EMBEDDINGS_EXTRA_ARGS = [
+        # Add any additional arguments for embeddings model here
+        # "--max-model-len", "512",
+        # "--gpu-memory-utilization", "0.5",
+    ]
+    
     # Create proxy server
     proxy = VLLMReverseProxy(proxy_port=PROXY_PORT)
     
     # Create reasoning service (GPU 0)
+    reasoning_command = [
+        "vllm", "serve",
+        REASONING_MODEL_PATH,
+        "--reasoning-parser", "deepseek_r1",
+        "--tensor-parallel-size", "1",
+        "--port", str(REASONING_PORT),
+        "--host", "0.0.0.0"
+    ] + REASONING_EXTRA_ARGS
+    
     reasoning_service = VLLMService(
         name="reasoning",
-        command=[
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--model", REASONING_MODEL_PATH,
-            "--reasoning-parser", "deepseek_r1",
-            "--tensor-parallel-size", "1",
-            "--port", str(REASONING_PORT),
-            "--host", "0.0.0.0"
-        ],
+        command=reasoning_command,
         port=REASONING_PORT,
         cuda_device="0"  # Use first GPU
     )
     
     # Create embeddings service (GPU 1)
+    embeddings_command = [
+        "vllm", "serve",
+        EMBEDDINGS_MODEL_PATH,
+        "--task", "embed",  # Specify embeddings task
+        "--tensor-parallel-size", "1",
+        "--port", str(EMBEDDINGS_PORT),
+        "--host", "0.0.0.0"
+    ] + EMBEDDINGS_EXTRA_ARGS
+    
     embeddings_service = VLLMService(
         name="embeddings",
-        command=[
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--model", EMBEDDINGS_MODEL_PATH,
-            "--task", "embed",  # Specify embeddings task
-            "--tensor-parallel-size", "1",
-            "--port", str(EMBEDDINGS_PORT),
-            "--host", "0.0.0.0"
-        ],
+        command=embeddings_command,
         port=EMBEDDINGS_PORT,
         cuda_device="1"  # Use second GPU
     )
@@ -298,8 +328,8 @@ async def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        # Start everything
-        await proxy.start()
+        # Start everything (services will start sequentially)
+        await proxy.start(reasoning_service, embeddings_service)
         
         # Keep running
         while True:
@@ -311,4 +341,12 @@ async def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Check if vllm command is available
+    try:
+        subprocess.run(["vllm", "--help"], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logger.error("vLLM command not found. Please ensure vLLM is installed and in PATH.")
+        logger.error("Install with: pip install vllm")
+        sys.exit(1)
+        
     asyncio.run(main())
