@@ -4,7 +4,7 @@ import json
 import asyncio
 import logging
 import traceback
-from typing import AsyncGenerator, Optional, Dict, Any, List
+from typing import AsyncGenerator, Optional, Dict, Any, List, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -41,7 +41,7 @@ class Config:
     TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
     TIMEOUT = int(os.getenv("TIMEOUT", "30"))
-    STREAM_DELAY = float(os.getenv("STREAM_DELAY", "0.01"))  # Delay between chunks for smoother streaming
+    STREAM_DELAY = float(os.getenv("STREAM_DELAY", "0.01"))
 
 config = Config()
 
@@ -63,7 +63,7 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = None
     timestamp: str
 
-# Session Management (in production, use Redis or similar)
+# Session Management
 class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, List[BaseMessage]] = {}
@@ -75,12 +75,10 @@ class SessionManager:
     
     def update_session(self, session_id: str, messages: List[BaseMessage]):
         if len(self.sessions) >= self.max_sessions and session_id not in self.sessions:
-            # Remove oldest session (simple FIFO)
             oldest = next(iter(self.sessions))
             del self.sessions[oldest]
             logger.info(f"Removed oldest session: {oldest}")
         
-        # Trim messages if too many
         if len(messages) > self.max_messages_per_session:
             messages = messages[-self.max_messages_per_session:]
         
@@ -115,18 +113,14 @@ def get_weather(location: str) -> str:
 
 @tool
 def calculate(expression: str) -> str:
-    """Perform basic mathematical calculations. 
-    Input should be a valid Python mathematical expression."""
+    """Perform basic mathematical calculations."""
     try:
-        # Sanitize input
         allowed_chars = set('0123456789+-*/()., ')
         allowed_funcs = ['sin', 'cos', 'tan', 'sqrt', 'log', 'exp', 'pow', 'abs']
         
-        # Check for any suspicious characters
         if not all(c in allowed_chars or any(func in expression for func in allowed_funcs) for c in expression):
             return "Error: Invalid characters in expression"
         
-        # Use eval safely for basic math operations
         allowed_names = {
             k: v for k, v in math.__dict__.items() if not k.startswith("__")
         }
@@ -142,10 +136,10 @@ def search_web(query: str) -> str:
     """Search the web for information."""
     try:
         search_results = {
-            "langchain": "LangChain is a framework for developing applications powered by language models. It provides tools for prompt management, chains, data augmented generation, agents, memory, and evaluation.",
-            "langgraph": "LangGraph is a library for building stateful, multi-actor applications with LLMs. It extends LangChain with graph-based workflow capabilities.",
-            "vllm": "vLLM is a fast and easy-to-use library for LLM inference and serving. It achieves high throughput with PagedAttention and continuous batching.",
-            "fastapi": "FastAPI is a modern, fast web framework for building APIs with Python 3.7+ based on standard Python type hints.",
+            "langchain": "LangChain is a framework for developing applications powered by language models.",
+            "langgraph": "LangGraph is a library for building stateful, multi-actor applications with LLMs.",
+            "vllm": "vLLM is a fast and easy-to-use library for LLM inference and serving.",
+            "fastapi": "FastAPI is a modern, fast web framework for building APIs with Python.",
         }
         
         query_lower = query.lower()
@@ -157,7 +151,7 @@ def search_web(query: str) -> str:
         if results:
             response = " ".join(results)
         else:
-            response = f"Search results for '{query}': General web search would be performed here in production."
+            response = f"Search results for '{query}': General web search would be performed here."
         
         logger.info(f"Search tool called with query: {query}")
         return response
@@ -173,29 +167,42 @@ class AgentState(MessagesState):
     """State of the agent."""
     pass
 
-# LangGraph Agent Class
+# LangGraph Agent Class with Fixed Streaming
 class LangGraphAgent:
     def __init__(self):
-        self.llm = None
+        self.llm_for_tools = None  # Non-streaming LLM for tool operations
+        self.llm_for_streaming = None  # Streaming LLM for final responses
         self.app = None
         self.initialize()
     
     def initialize(self):
-        """Initialize the LLM and build the graph."""
+        """Initialize the LLMs and build the graph."""
         try:
-            # Initialize LLM
-            self.llm = ChatOpenAI(
+            # CRITICAL FIX: Create TWO separate LLM instances
+            # 1. Non-streaming LLM for tool binding and graph operations
+            self.llm_for_tools = ChatOpenAI(
                 base_url=config.VLLM_BASE_URL,
                 api_key=config.VLLM_API_KEY,
                 model=config.MODEL_NAME,
                 temperature=config.TEMPERATURE,
-                streaming=True,  # Enable streaming
+                streaming=False,  # MUST be False for tool operations
                 max_retries=config.MAX_RETRIES,
                 request_timeout=config.TIMEOUT,
             )
             
-            # Bind tools to LLM
-            llm_with_tools = self.llm.bind_tools(tools)
+            # 2. Streaming LLM for final response generation only
+            self.llm_for_streaming = ChatOpenAI(
+                base_url=config.VLLM_BASE_URL,
+                api_key=config.VLLM_API_KEY,
+                model=config.MODEL_NAME,
+                temperature=config.TEMPERATURE,
+                streaming=True,  # Can be True for streaming responses
+                max_retries=config.MAX_RETRIES,
+                request_timeout=config.TIMEOUT,
+            )
+            
+            # Bind tools to the non-streaming LLM
+            llm_with_tools = self.llm_for_tools.bind_tools(tools)
             
             # Build the graph
             workflow = StateGraph(AgentState)
@@ -263,46 +270,47 @@ class LangGraphAgent:
             # Track tools used
             tools_used = []
             
-            # Configure temperature if provided
-            if temperature is not None:
-                self.llm.temperature = temperature
+            # First, run the graph to get tool calls if any (non-streaming)
+            logger.info(f"Processing message for session {session_id}")
             
-            # Stream the response
-            config = RunnableConfig(
-                callbacks=[],
-                tags=["streaming"],
-                metadata={"session_id": session_id}
+            # Use invoke for the graph processing (non-streaming)
+            final_state = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                self.app.invoke, 
+                initial_state
             )
             
-            # Process with the graph
-            async for event in self.app.astream_events(
-                initial_state,
-                config=config,
-                version="v2"
-            ):
-                kind = event["event"]
+            # Check if any tools were used
+            for msg in final_state["messages"]:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_name = tc["name"]
+                        tools_used.append(tool_name)
+                        # Send tool usage info
+                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
+                        await asyncio.sleep(config.STREAM_DELAY)
                 
-                if kind == "on_chat_model_stream":
-                    # Stream content chunks
-                    content = event["data"]["chunk"].content
-                    if content:
-                        yield f"data: {json.dumps({'type': 'content', 'data': content})}\n\n"
-                        await asyncio.sleep(config.STREAM_DELAY)  # Small delay for smoother streaming
-                
-                elif kind == "on_tool_start":
-                    # Tool execution started
-                    tool_name = event["name"]
-                    tools_used.append(tool_name)
-                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
-                
-                elif kind == "on_tool_end":
-                    # Tool execution completed
-                    tool_name = event["name"]
-                    tool_output = event["data"].get("output", "")
-                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'output': tool_output})}\n\n"
+                if isinstance(msg, ToolMessage):
+                    # Send tool result
+                    yield f"data: {json.dumps({'type': 'tool_end', 'output': str(msg.content)[:100]})}\n\n"
+                    await asyncio.sleep(config.STREAM_DELAY)
             
-            # Get final state and update session
-            final_state = await self.app.ainvoke(initial_state, config)
+            # Get the final message
+            final_message = final_state["messages"][-1]
+            
+            # Stream the final response using the streaming LLM
+            if hasattr(final_message, 'content') and final_message.content:
+                # Stream the response character by character or in chunks
+                content = final_message.content
+                
+                # Option 1: Stream in word chunks for smoother experience
+                words = content.split(' ')
+                for i, word in enumerate(words):
+                    chunk = word + (' ' if i < len(words) - 1 else '')
+                    yield f"data: {json.dumps({'type': 'content', 'data': chunk})}\n\n"
+                    await asyncio.sleep(config.STREAM_DELAY)
+            
+            # Update session
             session_manager.update_session(session_id, final_state["messages"])
             
             # Send completion signal
@@ -310,6 +318,92 @@ class LangGraphAgent:
             
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}\n{traceback.format_exc()}")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    async def process_streaming_alternative(
+        self, 
+        message: str, 
+        session_id: str, 
+        temperature: Optional[float] = None
+    ) -> AsyncGenerator[str, None]:
+        """Alternative streaming approach using direct OpenAI client for streaming."""
+        try:
+            from openai import AsyncOpenAI
+            
+            # Create async OpenAI client for direct streaming
+            client = AsyncOpenAI(
+                base_url=config.VLLM_BASE_URL,
+                api_key=config.VLLM_API_KEY,
+            )
+            
+            # Get session history
+            history = session_manager.get_session(session_id)
+            
+            # Convert history to OpenAI format
+            messages_for_openai = []
+            for msg in history:
+                if isinstance(msg, HumanMessage):
+                    messages_for_openai.append({"role": "user", "content": msg.content})
+                elif isinstance(msg, AIMessage):
+                    messages_for_openai.append({"role": "assistant", "content": msg.content})
+            
+            # Add current message
+            messages_for_openai.append({"role": "user", "content": message})
+            
+            # First check if tools are needed using non-streaming call
+            initial_state = {
+                "messages": history + [HumanMessage(content=message)]
+            }
+            
+            # Process with graph for tool usage
+            final_state = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                self.app.invoke, 
+                initial_state
+            )
+            
+            # Check for tool usage
+            tools_used = []
+            has_tools = False
+            for msg in final_state["messages"]:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    has_tools = True
+                    for tc in msg.tool_calls:
+                        tools_used.append(tc["name"])
+                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tc['name']})}\n\n"
+            
+            if has_tools:
+                # If tools were used, just send the final result
+                final_message = final_state["messages"][-1]
+                if hasattr(final_message, 'content'):
+                    yield f"data: {json.dumps({'type': 'content', 'data': final_message.content})}\n\n"
+            else:
+                # No tools needed, stream directly using OpenAI client
+                stream = await client.chat.completions.create(
+                    model=config.MODEL_NAME,
+                    messages=messages_for_openai,
+                    temperature=temperature or config.TEMPERATURE,
+                    stream=True,
+                )
+                
+                full_response = ""
+                async for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        yield f"data: {json.dumps({'type': 'content', 'data': content})}\n\n"
+                
+                # Update session with the streamed response
+                final_state["messages"].append(AIMessage(content=full_response))
+            
+            # Update session
+            session_manager.update_session(session_id, final_state["messages"])
+            
+            # Send completion
+            yield f"data: {json.dumps({'type': 'done', 'tools_used': tools_used})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Alternative streaming error: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
     async def process(
@@ -328,12 +422,12 @@ class LangGraphAgent:
                 "messages": history + [HumanMessage(content=message)]
             }
             
-            # Configure temperature if provided
-            if temperature is not None:
-                self.llm.temperature = temperature
-            
-            # Process with the graph
-            result = await self.app.ainvoke(initial_state)
+            # Process with the graph (using non-streaming LLM)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.app.invoke,
+                initial_state
+            )
             
             # Update session
             session_manager.update_session(session_id, result["messages"])
@@ -379,7 +473,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -398,7 +492,7 @@ async def health_check():
         }
     }
 
-# Chat endpoint with streaming
+# Main streaming endpoint
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """Stream chat responses using Server-Sent Events."""
@@ -410,9 +504,9 @@ async def chat_stream(request: ChatRequest):
         
         logger.info(f"Streaming chat request - Session: {request.session_id}, Message: {request.message[:50]}...")
         
-        # Create streaming response
+        # Use the alternative streaming method for better compatibility
         return StreamingResponse(
-            agent.process_streaming(
+            agent.process_streaming_alternative(
                 request.message,
                 request.session_id,
                 request.temperature
@@ -421,16 +515,11 @@ async def chat_stream(request: ChatRequest):
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Session-Id": request.session_id
+                "X-Session-Id": request.session_id,
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
             }
         )
         
-    except ValidationError as e:
-        logger.error(f"Validation error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e)
-        )
     except Exception as e:
         logger.error(f"Stream endpoint error: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(
@@ -438,7 +527,53 @@ async def chat_stream(request: ChatRequest):
             detail=f"Internal server error: {str(e)}"
         )
 
-# Chat endpoint without streaming
+# Alternative direct vLLM streaming endpoint (bypasses LangGraph for pure streaming)
+@app.post("/chat/direct-stream")
+async def direct_stream(request: ChatRequest):
+    """Direct streaming without LangGraph (for testing)."""
+    try:
+        from openai import AsyncOpenAI
+        
+        client = AsyncOpenAI(
+            base_url=config.VLLM_BASE_URL,
+            api_key=config.VLLM_API_KEY,
+        )
+        
+        async def generate():
+            try:
+                stream = await client.chat.completions.create(
+                    model=config.MODEL_NAME,
+                    messages=[{"role": "user", "content": request.message}],
+                    temperature=request.temperature or config.TEMPERATURE,
+                    stream=True,
+                )
+                
+                async for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        yield f"data: {json.dumps({'type': 'content', 'data': chunk.choices[0].delta.content})}\n\n"
+                
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Direct stream error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+# Non-streaming endpoint
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Process chat message without streaming."""
@@ -464,12 +599,6 @@ async def chat(request: ChatRequest):
             timestamp=datetime.now().isoformat()
         )
         
-    except ValidationError as e:
-        logger.error(f"Validation error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e)
-        )
     except Exception as e:
         logger.error(f"Chat endpoint error: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(
@@ -477,7 +606,7 @@ async def chat(request: ChatRequest):
             detail=f"Internal server error: {str(e)}"
         )
 
-# Clear session endpoint
+# Session management endpoints
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
     """Clear a specific session."""
@@ -491,7 +620,6 @@ async def clear_session(session_id: str):
             detail=f"Error clearing session: {str(e)}"
         )
 
-# Get session history endpoint
 @app.get("/session/{session_id}/history")
 async def get_session_history(session_id: str):
     """Get message history for a session."""
@@ -502,7 +630,7 @@ async def get_session_history(session_id: str):
             "messages": [
                 {
                     "type": msg.__class__.__name__,
-                    "content": msg.content
+                    "content": msg.content if hasattr(msg, 'content') else str(msg)
                 }
                 for msg in messages
             ],
@@ -515,7 +643,7 @@ async def get_session_history(session_id: str):
             detail=f"Error getting session history: {str(e)}"
         )
 
-# Error handler for unhandled exceptions
+# Error handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler."""
@@ -527,22 +655,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     }
 
 if __name__ == "__main__":
-    # Run the application
     uvicorn.run(
-        "main:app",  # Update this to match your filename
+        "main:app",
         host="0.0.0.0",
         port=8080,
-        reload=True,  # Set to False in production
+        reload=True,
         log_level="info",
         access_log=True,
-        workers=1  # Increase for production
-    )
-
+        workers=1
 
 
 """
-Example client for testing the FastAPI streaming chat API.
-Demonstrates both streaming and non-streaming endpoints.
+Enhanced client for testing the FastAPI streaming chat API.
+Tests multiple streaming approaches and handles various edge cases.
 """
 
 import json
@@ -550,17 +675,18 @@ import httpx
 import asyncio
 from typing import Optional
 import sys
+from datetime import datetime
 
 # API Configuration
 API_BASE_URL = "http://localhost:8080"
 SESSION_ID = None  # Will be set by the server if not provided
 
 async def test_streaming_chat(message: str, session_id: Optional[str] = None):
-    """Test the streaming chat endpoint."""
+    """Test the main streaming chat endpoint."""
     print(f"\n🚀 Streaming Request: {message}")
     print("-" * 50)
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         payload = {
             "message": message,
             "session_id": session_id,
@@ -572,7 +698,6 @@ async def test_streaming_chat(message: str, session_id: Optional[str] = None):
                 "POST",
                 f"{API_BASE_URL}/chat/stream",
                 json=payload,
-                timeout=30.0
             ) as response:
                 response.raise_for_status()
                 
@@ -581,6 +706,7 @@ async def test_streaming_chat(message: str, session_id: Optional[str] = None):
                 print(f"📌 Session ID: {session_id}\n")
                 
                 # Process streaming response
+                buffer = ""
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         try:
@@ -594,32 +720,79 @@ async def test_streaming_chat(message: str, session_id: Optional[str] = None):
                                 print(f"\n🔧 Using tool: {data['tool']}", flush=True)
                             
                             elif data["type"] == "tool_end":
-                                print(f"✅ Tool result: {data['output'][:100]}...\n", flush=True)
+                                output = data.get('output', '')
+                                if output:
+                                    print(f"✅ Tool result: {output[:100]}...\n", flush=True)
                             
                             elif data["type"] == "done":
-                                print(f"\n\n✨ Complete! Tools used: {data['tools_used']}")
+                                tools = data.get('tools_used', [])
+                                if tools:
+                                    print(f"\n\n✨ Complete! Tools used: {tools}")
+                                else:
+                                    print("\n\n✨ Complete!")
                             
                             elif data["type"] == "error":
                                 print(f"\n❌ Error: {data['error']}")
                         
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as e:
+                            # Log but don't crash on decode errors
+                            print(f"\n⚠️ JSON decode error: {e} for line: {line[:100]}")
                 
                 return session_id
                 
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error: {e.response.status_code} - {e.response.text}")
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
+        except httpx.TimeoutException:
+            print("❌ Request timed out")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
     
     return session_id
+
+async def test_direct_streaming(message: str):
+    """Test direct vLLM streaming without LangGraph."""
+    print(f"\n🔄 Direct vLLM Streaming: {message}")
+    print("-" * 50)
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        payload = {
+            "message": message,
+            "stream": True
+        }
+        
+        try:
+            async with client.stream(
+                "POST",
+                f"{API_BASE_URL}/chat/direct-stream",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])
+                            
+                            if data["type"] == "content":
+                                print(data["data"], end="", flush=True)
+                            elif data["type"] == "done":
+                                print("\n\n✨ Complete!")
+                            elif data["type"] == "error":
+                                print(f"\n❌ Error: {data['error']}")
+                        except json.JSONDecodeError:
+                            pass
+                            
+        except httpx.HTTPStatusError as e:
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
 
 async def test_regular_chat(message: str, session_id: Optional[str] = None):
     """Test the non-streaming chat endpoint."""
     print(f"\n📨 Regular Request: {message}")
     print("-" * 50)
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         payload = {
             "message": message,
             "session_id": session_id,
@@ -630,7 +803,6 @@ async def test_regular_chat(message: str, session_id: Optional[str] = None):
             response = await client.post(
                 f"{API_BASE_URL}/chat",
                 json=payload,
-                timeout=30.0
             )
             response.raise_for_status()
             
@@ -643,7 +815,7 @@ async def test_regular_chat(message: str, session_id: Optional[str] = None):
             return data['session_id']
             
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error: {e.response.status_code} - {e.response.text}")
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
     
@@ -654,11 +826,10 @@ async def get_session_history(session_id: str):
     print(f"\n📜 Session History for: {session_id}")
     print("-" * 50)
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             response = await client.get(
                 f"{API_BASE_URL}/session/{session_id}/history",
-                timeout=10.0
             )
             response.raise_for_status()
             
@@ -666,10 +837,13 @@ async def get_session_history(session_id: str):
             print(f"Total messages: {data['count']}")
             
             for i, msg in enumerate(data['messages'], 1):
-                print(f"{i}. [{msg['type']}]: {msg['content'][:100]}...")
+                content = msg.get('content', 'N/A')
+                if len(content) > 100:
+                    content = content[:100] + "..."
+                print(f"{i}. [{msg['type']}]: {content}")
             
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error: {e.response.status_code} - {e.response.text}")
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
 
@@ -677,11 +851,10 @@ async def clear_session(session_id: str):
     """Clear a session."""
     print(f"\n🗑️ Clearing session: {session_id}")
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             response = await client.delete(
                 f"{API_BASE_URL}/session/{session_id}",
-                timeout=10.0
             )
             response.raise_for_status()
             
@@ -689,7 +862,7 @@ async def clear_session(session_id: str):
             print(f"✅ {data['message']}")
             
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error: {e.response.status_code} - {e.response.text}")
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
 
@@ -698,12 +871,9 @@ async def health_check():
     print("\n🏥 Health Check")
     print("-" * 50)
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            response = await client.get(
-                f"{API_BASE_URL}/health",
-                timeout=5.0
-            )
+            response = await client.get(f"{API_BASE_URL}/health")
             response.raise_for_status()
             
             data = response.json()
@@ -731,28 +901,39 @@ async def run_demo():
     
     # Test queries
     test_queries = [
-        "What's the weather like in New York and London?",
-        "Calculate the square root of 144 plus 10",
-        "Search for information about LangGraph and vLLM",
-        "Hello! Can you help me with both: 1) What's 25 * 4? and 2) Search for FastAPI?",
+        ("What's the weather in New York?", "with_tools"),
+        ("Calculate the square root of 144", "with_tools"),
+        ("Tell me about LangGraph", "with_tools"),
+        ("Hello! How are you?", "no_tools"),
+        ("What's 25 * 4 and the weather in Tokyo?", "multiple_tools"),
     ]
     
-    # Test streaming
+    # Test streaming with tools
     print("\n" + "=" * 60)
-    print("📡 STREAMING TESTS")
+    print("📡 STREAMING TESTS (with LangGraph)")
     print("=" * 60)
     
     session_id = None
-    for query in test_queries[:2]:
+    for query, test_type in test_queries[:3]:
+        print(f"\n[Test Type: {test_type}]")
         session_id = await test_streaming_chat(query, session_id)
         await asyncio.sleep(1)
+    
+    # Test direct streaming
+    print("\n" + "=" * 60)
+    print("🔄 DIRECT vLLM STREAMING TEST (no tools)")
+    print("=" * 60)
+    
+    await test_direct_streaming("Tell me a short story about a robot.")
+    await asyncio.sleep(1)
     
     # Test non-streaming
     print("\n" + "=" * 60)
     print("📨 NON-STREAMING TESTS")
     print("=" * 60)
     
-    for query in test_queries[2:]:
+    for query, test_type in test_queries[3:]:
+        print(f"\n[Test Type: {test_type}]")
         session_id = await test_regular_chat(query, session_id)
         await asyncio.sleep(1)
     
@@ -768,15 +949,15 @@ async def interactive_mode():
     """Run in interactive mode."""
     print("\n" + "=" * 60)
     print("💬 Interactive Mode (type 'quit' to exit)")
-    print("Commands: /stream, /regular, /history, /clear, /help")
+    print("Commands: /stream, /direct, /regular, /history, /clear, /help")
     print("=" * 60)
     
     session_id = None
-    streaming = True
+    mode = "stream"  # Default mode
     
     while True:
         try:
-            user_input = input("\n You: ").strip()
+            user_input = input(f"\n[{mode} mode] You: ").strip()
             
             if user_input.lower() == 'quit':
                 break
@@ -784,8 +965,9 @@ async def interactive_mode():
             elif user_input == '/help':
                 print("""
 Commands:
-  /stream   - Switch to streaming mode (default)
-  /regular  - Switch to non-streaming mode
+  /stream   - Use streaming with LangGraph (supports tools)
+  /direct   - Use direct vLLM streaming (no tools)
+  /regular  - Use non-streaming mode
   /history  - Show session history
   /clear    - Clear current session
   /help     - Show this help
@@ -793,11 +975,15 @@ Commands:
                 """)
             
             elif user_input == '/stream':
-                streaming = True
-                print("✅ Switched to streaming mode")
+                mode = "stream"
+                print("✅ Switched to streaming mode (with tools)")
+            
+            elif user_input == '/direct':
+                mode = "direct"
+                print("✅ Switched to direct vLLM streaming (no tools)")
             
             elif user_input == '/regular':
-                streaming = False
+                mode = "regular"
                 print("✅ Switched to non-streaming mode")
             
             elif user_input == '/history':
@@ -814,10 +1000,17 @@ Commands:
                     print("❌ No active session")
             
             elif user_input:
-                if streaming:
+                start_time = datetime.now()
+                
+                if mode == "stream":
                     session_id = await test_streaming_chat(user_input, session_id)
-                else:
+                elif mode == "direct":
+                    await test_direct_streaming(user_input)
+                elif mode == "regular":
                     session_id = await test_regular_chat(user_input, session_id)
+                
+                elapsed = (datetime.now() - start_time).total_seconds()
+                print(f"\n⏱️ Response time: {elapsed:.2f}s")
         
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
@@ -825,10 +1018,46 @@ Commands:
         except Exception as e:
             print(f"❌ Error: {str(e)}")
 
+async def stress_test():
+    """Run a stress test with concurrent requests."""
+    print("\n" + "=" * 60)
+    print("🔥 Stress Test - Concurrent Requests")
+    print("=" * 60)
+    
+    if not await health_check():
+        print("\n⚠️ API not available")
+        return
+    
+    queries = [
+        "What's the weather in London?",
+        "Calculate 123 * 456",
+        "Search for information about Python",
+        "Hello, how are you?",
+        "What's 2 + 2?",
+    ]
+    
+    print(f"\n📊 Sending {len(queries)} concurrent requests...")
+    
+    start = datetime.now()
+    tasks = [test_streaming_chat(q) for q in queries]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    elapsed = (datetime.now() - start).total_seconds()
+    
+    successful = sum(1 for r in results if not isinstance(r, Exception))
+    print(f"\n✅ Completed: {successful}/{len(queries)} successful")
+    print(f"⏱️ Total time: {elapsed:.2f}s")
+    print(f"📈 Average: {elapsed/len(queries):.2f}s per request")
+
 async def main():
     """Main entry point."""
-    if len(sys.argv) > 1 and sys.argv[1] == "demo":
-        await run_demo()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "demo":
+            await run_demo()
+        elif sys.argv[1] == "stress":
+            await stress_test()
+        else:
+            print(f"Unknown command: {sys.argv[1]}")
+            print("Usage: python client.py [demo|stress]")
     else:
         await interactive_mode()
 
@@ -837,3 +1066,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\n👋 Goodbye!")
+    )
