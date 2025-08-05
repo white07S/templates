@@ -3,16 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 import json
-import os
-from agno.agent import Agent
-from agno.models.openai import OpenAIChat
+import uuid
+from langgraph_agent import LangGraphAgent
 
-
-
-
-app = FastAPI(title="Agno Chatbot API", description="Streaming chatbot using Agno and OpenAI GPT-4o-mini")
+app = FastAPI(title="LangGraph vLLM Chatbot API", description="Streaming chatbot using LangGraph and vLLM with session memory")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,54 +21,29 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     system_prompt: str = "You are a helpful AI assistant. Provide clear and concise responses."
+    session_id: Optional[str] = None
 
-class ChatAgent:
-    def __init__(self):
-        self.agent = Agent(
-            model=OpenAIChat(
-                id="gpt-4o-mini",
-                api_key=os.getenv("OPENAI_API_KEY")
-            ),
-            instructions="You are a helpful AI assistant. Provide clear, accurate, and engaging responses.",
-            markdown=True,
-            stream=True
-        )
-    
-    async def stream_response(self, message: str, system_prompt: str = None) -> AsyncGenerator[str, None]:
-        try:
-            if system_prompt:
-                self.agent.instructions = system_prompt
-            
-            response = self.agent.run(message, stream=True)
-            
-            if hasattr(response, '__iter__'):
-                for chunk in response:
-                    if hasattr(chunk, 'content') and chunk.content:
-                        yield f"data: {json.dumps({'content': chunk.content, 'type': 'content'})}\n\n"
-                    elif isinstance(chunk, str) and chunk:
-                        yield f"data: {json.dumps({'content': chunk, 'type': 'content'})}\n\n"
-            else:
-                yield f"data: {json.dumps({'content': str(response), 'type': 'content'})}\n\n"
-            
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e), 'type': 'error'})}\n\n"
-
-chat_agent = ChatAgent()
+# Initialize the LangGraph agent
+chat_agent = LangGraphAgent()
 
 @app.get("/")
 async def root():
-    return {"message": "Agno Chatbot API is running"}
+    return {"message": "LangGraph vLLM Chatbot API is running"}
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
+    # Generate session ID if not provided
+    session_id = request.session_id or str(uuid.uuid4())
+    
     async def generate_response():
+        # Send start signal
         yield "data: {\"type\": \"start\"}\n\n"
-        async for chunk in chat_agent.stream_response(request.message, request.system_prompt):
+        
+        # Stream the agent response
+        async for chunk in chat_agent.stream_response(request.message, session_id):
             yield chunk
             await asyncio.sleep(0.01)
     
