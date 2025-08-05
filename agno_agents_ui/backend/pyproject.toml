@@ -1,0 +1,13 @@
+[project]
+name = "agno-agents-ui"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "agno>=0.1.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+]

@@ -1,0 +1,44 @@
+/* Custom styles for assistant-ui components */
+.aui-thread-root {
+  @apply flex-1 flex flex-col;
+}
+
+.aui-thread-viewport {
+  @apply flex-1 overflow-y-auto px-4 py-6;
+}
+
+.aui-thread-messages {
+  @apply max-w-3xl mx-auto space-y-4;
+}
+
+.aui-message-root {
+  @apply flex gap-3;
+}
+
+.aui-message-root[data-role="user"] {
+  @apply justify-end;
+}
+
+.aui-message-content {
+  @apply max-w-[70%] p-3 rounded-lg;
+}
+
+.aui-message-root[data-role="user"] .aui-message-content {
+  @apply bg-blue-500 text-white;
+}
+
+.aui-message-root[data-role="assistant"] .aui-message-content {
+  @apply bg-gray-100 text-gray-900;
+}
+
+.aui-composer-root {
+  @apply flex gap-2 w-full;
+}
+
+.aui-composer-input {
+  @apply flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+}
+
+.aui-composer-send {
+  @apply px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
