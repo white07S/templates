@@ -41,7 +41,7 @@ class Config:
     TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
     TIMEOUT = int(os.getenv("TIMEOUT", "30"))
-    STREAM_DELAY = float(os.getenv("STREAM_DELAY", "0.01"))
+    STREAM_DELAY = float(os.getenv("STREAM_DELAY", "0.001"))  # Smaller delay for smoother streaming
 
 config = Config()
 
@@ -56,11 +56,6 @@ class ChatResponse(BaseModel):
     response: str
     session_id: str
     tools_used: List[str] = []
-    timestamp: str
-
-class ErrorResponse(BaseModel):
-    error: str
-    detail: Optional[str] = None
     timestamp: str
 
 # Session Management
@@ -167,48 +162,37 @@ class AgentState(MessagesState):
     """State of the agent."""
     pass
 
-# LangGraph Agent Class with Fixed Streaming
+# LangGraph Agent with TRUE Streaming
 class LangGraphAgent:
     def __init__(self):
-        self.llm_for_tools = None  # Non-streaming LLM for tool operations
-        self.llm_for_streaming = None  # Streaming LLM for final responses
+        self.llm = None
+        self.llm_with_tools = None
         self.app = None
         self.initialize()
     
     def initialize(self):
-        """Initialize the LLMs and build the graph."""
+        """Initialize the LLM and build the graph."""
         try:
-            # CRITICAL FIX: Create TWO separate LLM instances
-            # 1. Non-streaming LLM for tool binding and graph operations
-            self.llm_for_tools = ChatOpenAI(
+            # Create NON-STREAMING LLM for tool operations
+            # This is critical - tool binding doesn't work with streaming=True
+            self.llm = ChatOpenAI(
                 base_url=config.VLLM_BASE_URL,
                 api_key=config.VLLM_API_KEY,
                 model=config.MODEL_NAME,
                 temperature=config.TEMPERATURE,
-                streaming=False,  # MUST be False for tool operations
+                streaming=False,  # MUST be False for tool binding
                 max_retries=config.MAX_RETRIES,
                 request_timeout=config.TIMEOUT,
             )
             
-            # 2. Streaming LLM for final response generation only
-            self.llm_for_streaming = ChatOpenAI(
-                base_url=config.VLLM_BASE_URL,
-                api_key=config.VLLM_API_KEY,
-                model=config.MODEL_NAME,
-                temperature=config.TEMPERATURE,
-                streaming=True,  # Can be True for streaming responses
-                max_retries=config.MAX_RETRIES,
-                request_timeout=config.TIMEOUT,
-            )
-            
-            # Bind tools to the non-streaming LLM
-            llm_with_tools = self.llm_for_tools.bind_tools(tools)
+            # Bind tools
+            self.llm_with_tools = self.llm.bind_tools(tools)
             
             # Build the graph
             workflow = StateGraph(AgentState)
             
             # Add nodes
-            workflow.add_node("agent", lambda state: self.call_model(state, llm_with_tools))
+            workflow.add_node("agent", self.call_model)
             workflow.add_node("tools", ToolNode(tools))
             
             # Set entry point
@@ -236,10 +220,10 @@ class LangGraphAgent:
             logger.error(f"Failed to initialize agent: {str(e)}")
             raise
     
-    def call_model(self, state: AgentState, llm_with_tools):
+    def call_model(self, state: AgentState):
         """Call the model with the current state."""
         messages = state["messages"]
-        response = llm_with_tools.invoke(messages)
+        response = self.llm_with_tools.invoke(messages)
         return {"messages": [response]}
     
     def should_continue(self, state: AgentState):
@@ -251,13 +235,13 @@ class LangGraphAgent:
             return "tools"
         return "__end__"
     
-    async def process_streaming(
+    async def process_streaming_with_langgraph(
         self, 
         message: str, 
         session_id: str, 
         temperature: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
-        """Process message with streaming response."""
+        """TRUE streaming using LangGraph's astream method."""
         try:
             # Get session history
             history = session_manager.get_session(session_id)
@@ -267,143 +251,142 @@ class LangGraphAgent:
                 "messages": history + [HumanMessage(content=message)]
             }
             
-            # Track tools used
+            # Track what we've sent
             tools_used = []
+            final_messages = []
             
-            # First, run the graph to get tool calls if any (non-streaming)
-            logger.info(f"Processing message for session {session_id}")
+            # Use astream for true streaming
+            async for chunk in self.app.astream(initial_state):
+                # Process each chunk as it arrives
+                for node_name, node_output in chunk.items():
+                    if node_name == "agent":
+                        # Agent produced a message
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            final_messages.append(msg)
+                            
+                            # Check for tool calls
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    tool_name = tc["name"]
+                                    tools_used.append(tool_name)
+                                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
+                            
+                            # Stream content if available
+                            if hasattr(msg, 'content') and msg.content:
+                                # Stream the content in small chunks
+                                content = msg.content
+                                # Split into words for natural streaming
+                                words = content.split(' ')
+                                for i, word in enumerate(words):
+                                    if i > 0:
+                                        yield f"data: {json.dumps({'type': 'content', 'data': ' '})}\n\n"
+                                    # Stream each word
+                                    yield f"data: {json.dumps({'type': 'content', 'data': word})}\n\n"
+                                    await asyncio.sleep(config.STREAM_DELAY)
+                    
+                    elif node_name == "tools":
+                        # Tool was executed
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            final_messages.append(msg)
+                            if isinstance(msg, ToolMessage):
+                                yield f"data: {json.dumps({'type': 'tool_end', 'output': str(msg.content)[:100]})}\n\n"
             
-            # Use invoke for the graph processing (non-streaming)
-            final_state = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                self.app.invoke, 
-                initial_state
-            )
+            # Update session with all messages
+            all_messages = history + final_messages
+            session_manager.update_session(session_id, all_messages)
             
-            # Check if any tools were used
-            for msg in final_state["messages"]:
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        tool_name = tc["name"]
-                        tools_used.append(tool_name)
-                        # Send tool usage info
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
-                        await asyncio.sleep(config.STREAM_DELAY)
-                
-                if isinstance(msg, ToolMessage):
-                    # Send tool result
-                    yield f"data: {json.dumps({'type': 'tool_end', 'output': str(msg.content)[:100]})}\n\n"
-                    await asyncio.sleep(config.STREAM_DELAY)
-            
-            # Get the final message
-            final_message = final_state["messages"][-1]
-            
-            # Stream the final response using the streaming LLM
-            if hasattr(final_message, 'content') and final_message.content:
-                # Stream the response character by character or in chunks
-                content = final_message.content
-                
-                # Option 1: Stream in word chunks for smoother experience
-                words = content.split(' ')
-                for i, word in enumerate(words):
-                    chunk = word + (' ' if i < len(words) - 1 else '')
-                    yield f"data: {json.dumps({'type': 'content', 'data': chunk})}\n\n"
-                    await asyncio.sleep(config.STREAM_DELAY)
-            
-            # Update session
-            session_manager.update_session(session_id, final_state["messages"])
-            
-            # Send completion signal
+            # Send completion
             yield f"data: {json.dumps({'type': 'done', 'tools_used': tools_used})}\n\n"
             
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}\n{traceback.format_exc()}")
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
-    async def process_streaming_alternative(
+    async def process_streaming_direct_vllm(
         self, 
         message: str, 
-        session_id: str, 
+        session_id: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
-        """Alternative streaming approach using direct OpenAI client for streaming."""
+        """Direct vLLM streaming without LangGraph - TRUE streaming."""
         try:
-            from openai import AsyncOpenAI
+            import httpx
             
-            # Create async OpenAI client for direct streaming
-            client = AsyncOpenAI(
-                base_url=config.VLLM_BASE_URL,
-                api_key=config.VLLM_API_KEY,
-            )
-            
-            # Get session history
-            history = session_manager.get_session(session_id)
-            
-            # Convert history to OpenAI format
-            messages_for_openai = []
-            for msg in history:
-                if isinstance(msg, HumanMessage):
-                    messages_for_openai.append({"role": "user", "content": msg.content})
-                elif isinstance(msg, AIMessage):
-                    messages_for_openai.append({"role": "assistant", "content": msg.content})
-            
-            # Add current message
-            messages_for_openai.append({"role": "user", "content": message})
-            
-            # First check if tools are needed using non-streaming call
-            initial_state = {
-                "messages": history + [HumanMessage(content=message)]
+            # Prepare the request
+            headers = {
+                "Content-Type": "application/json",
             }
             
-            # Process with graph for tool usage
-            final_state = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                self.app.invoke, 
-                initial_state
-            )
+            # Get session history if exists
+            messages = []
+            if session_id:
+                history = session_manager.get_session(session_id)
+                for msg in history:
+                    if isinstance(msg, HumanMessage):
+                        messages.append({"role": "user", "content": msg.content})
+                    elif isinstance(msg, AIMessage):
+                        messages.append({"role": "assistant", "content": msg.content})
             
-            # Check for tool usage
-            tools_used = []
-            has_tools = False
-            for msg in final_state["messages"]:
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    has_tools = True
-                    for tc in msg.tool_calls:
-                        tools_used.append(tc["name"])
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tc['name']})}\n\n"
+            # Add current message
+            messages.append({"role": "user", "content": message})
             
-            if has_tools:
-                # If tools were used, just send the final result
-                final_message = final_state["messages"][-1]
-                if hasattr(final_message, 'content'):
-                    yield f"data: {json.dumps({'type': 'content', 'data': final_message.content})}\n\n"
-            else:
-                # No tools needed, stream directly using OpenAI client
-                stream = await client.chat.completions.create(
-                    model=config.MODEL_NAME,
-                    messages=messages_for_openai,
-                    temperature=temperature or config.TEMPERATURE,
-                    stream=True,
-                )
-                
-                full_response = ""
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        full_response += content
-                        yield f"data: {json.dumps({'type': 'content', 'data': content})}\n\n"
-                
-                # Update session with the streamed response
-                final_state["messages"].append(AIMessage(content=full_response))
+            payload = {
+                "model": config.MODEL_NAME,
+                "messages": messages,
+                "temperature": temperature or config.TEMPERATURE,
+                "stream": True,
+                "max_tokens": 2048,
+            }
             
-            # Update session
-            session_manager.update_session(session_id, final_state["messages"])
-            
-            # Send completion
-            yield f"data: {json.dumps({'type': 'done', 'tools_used': tools_used})}\n\n"
-            
+            # Make streaming request to vLLM
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{config.VLLM_BASE_URL}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    
+                    full_response = ""
+                    
+                    # Process SSE stream from vLLM
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            if line == "data: [DONE]":
+                                break
+                            
+                            try:
+                                chunk_data = json.loads(line[6:])
+                                if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                                    delta = chunk_data["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    
+                                    if content:
+                                        full_response += content
+                                        # Send content chunk to client
+                                        yield f"data: {json.dumps({'type': 'content', 'data': content})}\n\n"
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse chunk: {line}")
+                                continue
+                    
+                    # Update session if session_id provided
+                    if session_id and full_response:
+                        history = session_manager.get_session(session_id)
+                        history.append(HumanMessage(content=message))
+                        history.append(AIMessage(content=full_response))
+                        session_manager.update_session(session_id, history)
+                    
+                    # Send completion
+                    yield f"data: {json.dumps({'type': 'done', 'tools_used': []})}\n\n"
+                    
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error in direct streaming: {e.response.status_code} - {e.response.text}")
+            yield f"data: {json.dumps({'type': 'error', 'error': f'HTTP {e.response.status_code}'})}\n\n"
         except Exception as e:
-            logger.error(f"Alternative streaming error: {str(e)}")
+            logger.error(f"Direct streaming error: {str(e)}\n{traceback.format_exc()}")
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
     async def process(
@@ -422,7 +405,7 @@ class LangGraphAgent:
                 "messages": history + [HumanMessage(content=message)]
             }
             
-            # Process with the graph (using non-streaming LLM)
+            # Process with the graph
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 self.app.invoke,
@@ -454,19 +437,17 @@ class LangGraphAgent:
 # Initialize agent
 agent = LangGraphAgent()
 
-# FastAPI app with lifespan
+# FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Starting FastAPI application...")
     yield
-    # Shutdown
     logger.info("Shutting down FastAPI application...")
 
 app = FastAPI(
     title="LangGraph vLLM Streaming API",
-    description="FastAPI application for LangGraph with vLLM backend and streaming support",
-    version="1.0.0",
+    description="FastAPI application for LangGraph with vLLM backend and TRUE streaming support",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -479,7 +460,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health check endpoint
+# Health check
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -492,21 +473,19 @@ async def health_check():
         }
     }
 
-# Main streaming endpoint
+# Main streaming endpoint with LangGraph
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """Stream chat responses using Server-Sent Events."""
+    """Stream chat responses with LangGraph (supports tools)."""
     try:
-        # Generate session ID if not provided
         if not request.session_id:
             import uuid
             request.session_id = str(uuid.uuid4())
         
         logger.info(f"Streaming chat request - Session: {request.session_id}, Message: {request.message[:50]}...")
         
-        # Use the alternative streaming method for better compatibility
         return StreamingResponse(
-            agent.process_streaming_alternative(
+            agent.process_streaming_with_langgraph(
                 request.message,
                 request.session_id,
                 request.temperature
@@ -517,6 +496,7 @@ async def chat_stream(request: ChatRequest):
                 "Connection": "keep-alive",
                 "X-Session-Id": request.session_id,
                 "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Transfer-Encoding": "chunked",
             }
         )
         
@@ -527,47 +507,35 @@ async def chat_stream(request: ChatRequest):
             detail=f"Internal server error: {str(e)}"
         )
 
-# Alternative direct vLLM streaming endpoint (bypasses LangGraph for pure streaming)
+# Direct vLLM streaming (no tools, but true streaming)
 @app.post("/chat/direct-stream")
 async def direct_stream(request: ChatRequest):
-    """Direct streaming without LangGraph (for testing)."""
+    """Direct vLLM streaming without LangGraph - TRUE streaming."""
     try:
-        from openai import AsyncOpenAI
+        if not request.session_id:
+            import uuid
+            request.session_id = str(uuid.uuid4())
         
-        client = AsyncOpenAI(
-            base_url=config.VLLM_BASE_URL,
-            api_key=config.VLLM_API_KEY,
-        )
-        
-        async def generate():
-            try:
-                stream = await client.chat.completions.create(
-                    model=config.MODEL_NAME,
-                    messages=[{"role": "user", "content": request.message}],
-                    temperature=request.temperature or config.TEMPERATURE,
-                    stream=True,
-                )
-                
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        yield f"data: {json.dumps({'type': 'content', 'data': chunk.choices[0].delta.content})}\n\n"
-                
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        logger.info(f"Direct streaming request - Message: {request.message[:50]}...")
         
         return StreamingResponse(
-            generate(),
+            agent.process_streaming_direct_vllm(
+                request.message,
+                request.session_id,
+                request.temperature
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "X-Session-Id": request.session_id,
                 "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked",
             }
         )
         
     except Exception as e:
-        logger.error(f"Direct stream error: {str(e)}")
+        logger.error(f"Direct stream error: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -578,14 +546,12 @@ async def direct_stream(request: ChatRequest):
 async def chat(request: ChatRequest):
     """Process chat message without streaming."""
     try:
-        # Generate session ID if not provided
         if not request.session_id:
             import uuid
             request.session_id = str(uuid.uuid4())
         
         logger.info(f"Chat request - Session: {request.session_id}, Message: {request.message[:50]}...")
         
-        # Process message
         result = await agent.process(
             request.message,
             request.session_id,
@@ -606,7 +572,48 @@ async def chat(request: ChatRequest):
             detail=f"Internal server error: {str(e)}"
         )
 
-# Session management endpoints
+# Test raw vLLM endpoint
+@app.post("/test/vllm-raw")
+async def test_vllm_raw(request: ChatRequest):
+    """Test raw vLLM API to verify streaming works."""
+    try:
+        import httpx
+        
+        async def generate():
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                payload = {
+                    "model": config.MODEL_NAME,
+                    "messages": [{"role": "user", "content": request.message}],
+                    "temperature": request.temperature or config.TEMPERATURE,
+                    "stream": True,
+                }
+                
+                async with client.stream(
+                    "POST",
+                    f"{config.VLLM_BASE_URL}/chat/completions",
+                    json=payload,
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line:
+                            yield f"{line}\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Test vLLM raw error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+# Session management
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
     """Clear a specific session."""
@@ -643,17 +650,6 @@ async def get_session_history(session_id: str):
             detail=f"Error getting session history: {str(e)}"
         )
 
-# Error handler
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler."""
-    logger.error(f"Unhandled exception: {str(exc)}\n{traceback.format_exc()}")
-    return {
-        "error": "Internal server error",
-        "detail": str(exc) if app.debug else "An unexpected error occurred",
-        "timestamp": datetime.now().isoformat()
-    }
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
@@ -663,6 +659,8 @@ if __name__ == "__main__":
         log_level="info",
         access_log=True,
         workers=1
+    )
+
 
 
 """
@@ -749,7 +747,7 @@ async def test_streaming_chat(message: str, session_id: Optional[str] = None):
     
     return session_id
 
-async def test_direct_streaming(message: str):
+async def test_direct_streaming(message: str, session_id: Optional[str] = None):
     """Test direct vLLM streaming without LangGraph."""
     print(f"\n🔄 Direct vLLM Streaming: {message}")
     print("-" * 50)
@@ -757,6 +755,7 @@ async def test_direct_streaming(message: str):
     async with httpx.AsyncClient(timeout=30.0) as client:
         payload = {
             "message": message,
+            "session_id": session_id,
             "stream": True
         }
         
@@ -768,19 +767,64 @@ async def test_direct_streaming(message: str):
             ) as response:
                 response.raise_for_status()
                 
+                # Get session ID if provided
+                session_id = response.headers.get("X-Session-Id")
+                if session_id:
+                    print(f"📌 Session ID: {session_id}\n")
+                
+                char_count = 0
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         try:
                             data = json.loads(line[6:])
                             
                             if data["type"] == "content":
-                                print(data["data"], end="", flush=True)
+                                # Print content as it streams
+                                content = data["data"]
+                                print(content, end="", flush=True)
+                                char_count += len(content)
                             elif data["type"] == "done":
-                                print("\n\n✨ Complete!")
+                                print(f"\n\n✨ Complete! ({char_count} characters streamed)")
                             elif data["type"] == "error":
                                 print(f"\n❌ Error: {data['error']}")
                         except json.JSONDecodeError:
                             pass
+                            
+        except httpx.HTTPStatusError as e:
+            print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
+        except httpx.TimeoutException:
+            print("❌ Request timed out")
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    return session_id
+
+async def test_raw_vllm():
+    """Test raw vLLM API to verify streaming works."""
+    print(f"\n🔬 Testing Raw vLLM API")
+    print("-" * 50)
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        payload = {
+            "message": "Tell me a very short story (2 sentences)",
+            "stream": True
+        }
+        
+        try:
+            async with client.stream(
+                "POST",
+                f"{API_BASE_URL}/test/vllm-raw",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                
+                print("Raw vLLM response:")
+                print("-" * 30)
+                async for line in response.aiter_lines():
+                    if line:
+                        print(line)
+                print("-" * 30)
+                print("✅ Raw vLLM streaming is working!")
                             
         except httpx.HTTPStatusError as e:
             print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
@@ -899,6 +943,10 @@ async def run_demo():
         print("\n⚠️ Please ensure the API is running on http://localhost:8080")
         return
     
+    # Test raw vLLM first to verify streaming works
+    await test_raw_vllm()
+    await asyncio.sleep(1)
+    
     # Test queries
     test_queries = [
         ("What's the weather in New York?", "with_tools"),
@@ -924,7 +972,7 @@ async def run_demo():
     print("🔄 DIRECT vLLM STREAMING TEST (no tools)")
     print("=" * 60)
     
-    await test_direct_streaming("Tell me a short story about a robot.")
+    await test_direct_streaming("Tell me a short story about a robot (3 sentences).", session_id)
     await asyncio.sleep(1)
     
     # Test non-streaming
@@ -949,7 +997,7 @@ async def interactive_mode():
     """Run in interactive mode."""
     print("\n" + "=" * 60)
     print("💬 Interactive Mode (type 'quit' to exit)")
-    print("Commands: /stream, /direct, /regular, /history, /clear, /help")
+    print("Commands: /stream, /direct, /regular, /test-raw, /history, /clear, /help")
     print("=" * 60)
     
     session_id = None
@@ -965,13 +1013,14 @@ async def interactive_mode():
             elif user_input == '/help':
                 print("""
 Commands:
-  /stream   - Use streaming with LangGraph (supports tools)
-  /direct   - Use direct vLLM streaming (no tools)
-  /regular  - Use non-streaming mode
-  /history  - Show session history
-  /clear    - Clear current session
-  /help     - Show this help
-  quit      - Exit the application
+  /stream    - Use streaming with LangGraph (supports tools)
+  /direct    - Use direct vLLM streaming (no tools, true streaming)
+  /regular   - Use non-streaming mode
+  /test-raw  - Test raw vLLM API to verify streaming works
+  /history   - Show session history
+  /clear     - Clear current session
+  /help      - Show this help
+  quit       - Exit the application
                 """)
             
             elif user_input == '/stream':
@@ -985,6 +1034,9 @@ Commands:
             elif user_input == '/regular':
                 mode = "regular"
                 print("✅ Switched to non-streaming mode")
+            
+            elif user_input == '/test-raw':
+                await test_raw_vllm()
             
             elif user_input == '/history':
                 if session_id:
@@ -1005,7 +1057,7 @@ Commands:
                 if mode == "stream":
                     session_id = await test_streaming_chat(user_input, session_id)
                 elif mode == "direct":
-                    await test_direct_streaming(user_input)
+                    session_id = await test_direct_streaming(user_input, session_id)
                 elif mode == "regular":
                     session_id = await test_regular_chat(user_input, session_id)
                 
@@ -1066,4 +1118,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\n👋 Goodbye!")
-    )
