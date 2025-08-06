@@ -1,0 +1,22 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "python-multipart",
+    "langchain",
+    "langchain-core",
+    "langchain-openai",
+    "langgraph",
+    "openai",
+    "httpx",
+    "aiofiles",
+    "sse-starlette",
+    "python-dotenv",
+    "tinydb>=4.8.2",
+]
