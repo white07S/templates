@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: ./run_mineru_local.sh /path/to/file.pdf /path/to/local/MinerU2.0-2505-0.9B [output_dir] [cuda_device]
+# Usage: ./run_mineru_local.sh <pdf_path> <model_dir> [output_dir='.' ] [cuda_device=0]
 # Example:
-#   ./run_mineru_local.sh ./doc.pdf /data/models/MinerU2.0-2505-0.9B ./out 0
+#   ./run_mineru_local.sh ./doc.pdf /data/models/MinerU2.0-2505-0.9B .
+#   ./run_mineru_local.sh ./doc.pdf /data/models/MinerU2.0-2505-0.9B . 0
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 <pdf_path> <model_dir> [output_dir] [cuda_device]"
@@ -12,26 +13,16 @@ fi
 
 PDF="$1"
 MODEL_DIR="$2"
-OUTDIR="${3:-./mineru_out/$(date +%Y%m%d_%H%M%S)}"
+OUTDIR="${3:-.}"               # default: current dir
 CUDA_DEV="${4:-0}"
 
-# --- Basic checks
-if [[ ! -f "$PDF" ]]; then
-  echo "Error: PDF not found: $PDF"
-  exit 2
-fi
-if [[ ! -d "$MODEL_DIR" ]]; then
-  echo "Error: Model dir not found: $MODEL_DIR"
-  exit 3
-fi
-
+[[ -f "$PDF" ]] || { echo "Error: PDF not found: $PDF"; exit 2; }
+[[ -d "$MODEL_DIR" ]] || { echo "Error: Model dir not found: $MODEL_DIR"; exit 3; }
 mkdir -p "$OUTDIR"
 
-# --- Create a minimal local config for MinerU
+# --- Minimal local config for MinerU
 CONFIG_DIR="$(mktemp -d)"
 CONFIG_JSON="$CONFIG_DIR/mineru_local.json"
-
-# Map just the VLM folder; keep keys minimal for offline VLM usage.
 cat > "$CONFIG_JSON" <<EOF
 {
   "models-dir": {
@@ -40,24 +31,25 @@ cat > "$CONFIG_JSON" <<EOF
 }
 EOF
 
-# --- Offline + local-only environment
+# --- Offline + local-only
 export MINERU_MODEL_SOURCE=local
 export MINERU_TOOLS_CONFIG_JSON="$CONFIG_JSON"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export CUDA_VISIBLE_DEVICES="$CUDA_DEV"
 
-# --- Sanity notes for common issues
-if ! ls "$MODEL_DIR"/{config.json,*.safetensors,tokenizer.json,tokenizer_config.json} >/dev/null 2>&1; then
-  echo "Warning: expected model files not all found in $MODEL_DIR (config.json / *.safetensors / tokenizer.json)."
-  echo "         Ensure the MinerU2.0-2505-0.9B repo contents are here, and the SigLIP vision encoder subfolder exists."
-fi
-if [[ ! -f "$MODEL_DIR/google/siglip-so400m-patch14-384/config.json" ]]; then
-  echo "Warning: missing SigLIP vision encoder under:"
-  echo "         $MODEL_DIR/google/siglip-so400m-patch14-384/"
-fi
+# --- Quick sanity
+shopt -s nullglob
+need_warn=0
+[[ -f "$MODEL_DIR/config.json" ]] || need_warn=1
+ls "$MODEL_DIR"/*.safetensors >/dev/null 2>&1 || need_warn=1
+[[ -f "$MODEL_DIR/tokenizer.json" || -f "$MODEL_DIR/tokenizer_config.json" ]] || need_warn=1
+[[ -f "$MODEL_DIR/google/siglip-so400m-patch14-384/config.json" ]] || {
+  echo "Warning: SigLIP vision encoder not found under: $MODEL_DIR/google/siglip-so400m-patch14-384/"
+}
+[[ $need_warn -eq 0 ]] || echo "Warning: some expected model files not found; continuing…"
 
-# --- Pick CLI (prefer 'mineru', fallback to 'python -m mineru')
+# --- Pick CLI
 if command -v mineru >/dev/null 2>&1; then
   CLI="mineru"
 else
@@ -67,21 +59,35 @@ fi
 echo "==> Running MinerU locally"
 echo "PDF:     $PDF"
 echo "Model:   $MODEL_DIR"
-echo "Output:  $OUTDIR"
+echo "Output:  $OUTDIR (current dir if '.')"
 echo "GPU:     $CUDA_VISIBLE_DEVICES"
-echo "Config:  $CONFIG_JSON"
 echo
 
-# Try VLM backend explicitly; if the flag name changed, retry without it.
+# Run (transformers backend). If backend flag unknown, retry without it.
 set +e
 $CLI -p "$PDF" -o "$OUTDIR" -b vlm-transformers
 RC=$?
 set -e
 if [[ $RC -ne 0 ]]; then
-  echo "Backend flag failed or unknown; retrying without explicit backend..."
+  echo "Backend flag failed; retrying without explicit backend..."
   $CLI -p "$PDF" -o "$OUTDIR"
 fi
 
-echo
-echo "✅ Done. Output -> $OUTDIR"
-echo "   (Keep $CONFIG_JSON if you want to reuse the same mapping; otherwise it will be auto-deleted on reboot.)"
+# --- Put a clean Markdown file in the current dir
+base="$(basename "$PDF")"
+stem="${base%.*}"
+
+# Find a produced .md (MinerU may nest outputs)
+md_src="$(find "$OUTDIR" -type f -name '*.md' | head -n 1 || true)"
+if [[ -n "${md_src:-}" ]]; then
+  target="./${stem}.md"
+  # If found file is already the target, leave it; else copy it to CWD as <stem>.md
+  if [[ "$md_src" != "$target" ]]; then
+    cp -f "$md_src" "$target"
+  fi
+  echo "✅ Markdown -> $target"
+else
+  echo "⚠️  No markdown file found under: $OUTDIR"
+fi
+
+echo "Done."
