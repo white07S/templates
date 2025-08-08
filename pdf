@@ -1,111 +1,87 @@
-Here’s the fastest way to install MinerU and run the MinerU2.0-2505-0.9B model fully offline from your local files.
+#!/usr/bin/env bash
+set -euo pipefail
 
-0) Reqs (quick)
-	•	Python 3.10–3.13
-	•	For VLM mode: NVIDIA Turing+ GPU, ~8GB+ VRAM (SGLang accel = Linux or WSL2).  ￼
+# Usage: ./run_mineru_local.sh /path/to/file.pdf /path/to/local/MinerU2.0-2505-0.9B [output_dir] [cuda_device]
+# Example:
+#   ./run_mineru_local.sh ./doc.pdf /data/models/MinerU2.0-2505-0.9B ./out 0
 
-1) Install MinerU (no extra clutter)
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <pdf_path> <model_dir> [output_dir] [cuda_device]"
+  exit 1
+fi
 
-pip install --upgrade pip
-pip install uv
-uv pip install -U "mineru[core]"
-# optional: if you want SGLang acceleration later:
-# uv pip install -U "mineru[sglang]"
+PDF="$1"
+MODEL_DIR="$2"
+OUTDIR="${3:-./mineru_out/$(date +%Y%m%d_%H%M%S)}"
+CUDA_DEV="${4:-0}"
 
-This is the official quick-start path.  ￼
+# --- Basic checks
+if [[ ! -f "$PDF" ]]; then
+  echo "Error: PDF not found: $PDF"
+  exit 2
+fi
+if [[ ! -d "$MODEL_DIR" ]]; then
+  echo "Error: Model dir not found: $MODEL_DIR"
+  exit 3
+fi
 
-2) Tell MinerU to use your local model files
+mkdir -p "$OUTDIR"
 
-MinerU will otherwise try to pull from Hugging Face/ModelScope. Switch the model source to local:
+# --- Create a minimal local config for MinerU
+CONFIG_DIR="$(mktemp -d)"
+CONFIG_JSON="$CONFIG_DIR/mineru_local.json"
 
-export MINERU_MODEL_SOURCE=local
-
-If you want to keep the config outside the default “user directory”, point MinerU at your config explicitly:
-
-export MINERU_TOOLS_CONFIG_JSON=/abs/path/to/mineru.json
-
-Both env vars are officially supported.  ￼
-
-3) Minimal mineru.json (maps your local model dirs)
-
-Create /abs/path/to/mineru.json with at least this (adjust paths):
-
+# Map just the VLM folder; keep keys minimal for offline VLM usage.
+cat > "$CONFIG_JSON" <<EOF
 {
   "models-dir": {
-    "pipeline": "/data/mineru_models/pipeline",
-    "vlm": "/data/mineru_models/vlm"
+    "vlm": "$(realpath "$MODEL_DIR")"
   }
 }
+EOF
 
-	•	pipeline is for the classical OCR/layout stack (CPU/GPU).
-	•	vlm is where your MinerU2.0-2505-0.9B and its vision encoder live.
-After setting this, MINERU_MODEL_SOURCE=local makes MinerU load only from these folders.  ￼
+# --- Offline + local-only environment
+export MINERU_MODEL_SOURCE=local
+export MINERU_TOOLS_CONFIG_JSON="$CONFIG_JSON"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export CUDA_VISIBLE_DEVICES="$CUDA_DEV"
 
-4) Put the downloaded HF model in the VLM folder
+# --- Sanity notes for common issues
+if ! ls "$MODEL_DIR"/{config.json,*.safetensors,tokenizer.json,tokenizer_config.json} >/dev/null 2>&1; then
+  echo "Warning: expected model files not all found in $MODEL_DIR (config.json / *.safetensors / tokenizer.json)."
+  echo "         Ensure the MinerU2.0-2505-0.9B repo contents are here, and the SigLIP vision encoder subfolder exists."
+fi
+if [[ ! -f "$MODEL_DIR/google/siglip-so400m-patch14-384/config.json" ]]; then
+  echo "Warning: missing SigLIP vision encoder under:"
+  echo "         $MODEL_DIR/google/siglip-so400m-patch14-384/"
+fi
 
-Your VLM directory should contain the 0.9B weights and the SigLIP vision encoder, e.g.:
+# --- Pick CLI (prefer 'mineru', fallback to 'python -m mineru')
+if command -v mineru >/dev/null 2>&1; then
+  CLI="mineru"
+else
+  CLI="python -m mineru"
+fi
 
-/data/mineru_models/vlm/
-└── MinerU2.0-2505-0.9B/
-    ├── model.safetensors
-    ├── config.json
-    ├── tokenizer_config.json
-    ├── vocab.json
-    ├── merges.txt
-    ├── ...
-    └── google/
-        └── siglip-so400m-patch14-384/
-            ├── config.json
-            └── (vision encoder files)
+echo "==> Running MinerU locally"
+echo "PDF:     $PDF"
+echo "Model:   $MODEL_DIR"
+echo "Output:  $OUTDIR"
+echo "GPU:     $CUDA_VISIBLE_DEVICES"
+echo "Config:  $CONFIG_JSON"
+echo
 
-That google/siglip-so400m-patch14-384 subfolder is present on the HF repo and is required for the VLM. Keep the same structure locally.  ￼
+# Try VLM backend explicitly; if the flag name changed, retry without it.
+set +e
+$CLI -p "$PDF" -o "$OUTDIR" -b vlm-transformers
+RC=$?
+set -e
+if [[ $RC -ne 0 ]]; then
+  echo "Backend flag failed or unknown; retrying without explicit backend..."
+  $CLI -p "$PDF" -o "$OUTDIR"
+fi
 
-5) Run it (CLI)
-
-Basic parse (VLM via Transformers, no server needed):
-
-mineru -p /path/to/input.pdf -o /path/to/out -b vlm-transformers
-
-Prefer specific GPU or multi-GPU box?
-
-CUDA_VISIBLE_DEVICES=0 \
-MINERU_MODEL_SOURCE=local \
-mineru -p /path/to/input.pdf -o /path/to/out -b vlm-transformers
-
-Flags are from the official CLI; -b selects backend. CUDA_VISIBLE_DEVICES selection is supported.  ￼
-
-6) (Optional) SGLang acceleration (20–30× faster)
-
-Start SGLang server, then call via client (CPU-only client works; server needs the GPU):
-
-# terminal A (GPU box)
-mineru-sglang-server --port 30000
-
-# terminal B (anywhere that can reach the server)
-MINERU_MODEL_SOURCE=local \
-mineru -p /path/to/input.pdf -o /path/to/out \
-  -b vlm-sglang-client -u http://127.0.0.1:30000
-
-Or run the Gradio UI locally:
-
-mineru-gradio --server-name 0.0.0.0 --server-port 7860
-# or with sglang engine on same machine:
-mineru-gradio --server-name 0.0.0.0 --server-port 7860 --enable-sglang-engine true
-
-SGLang usage/params and these commands are straight from the docs.  ￼
-
-7) Sanity checks
-
-mineru --help
-mineru-api --host 0.0.0.0 --port 8000   # local REST API at /docs
-
-CLI options include --source local, backends, paging, device, etc.  ￼
-
-⸻
-
-Common gotchas
-	•	It’s still downloading? You likely didn’t set MINERU_MODEL_SOURCE=local, or your mineru.json doesn’t point to the right folders. Fix the env var and paths.  ￼
-	•	Missing vision encoder: ensure the google/siglip-so400m-patch14-384 folder sits under the same model root as on HF.  ￼
-	•	VRAM errors: on VLM/SGLang, try a larger GPU, or tune SGLang memory flags (see advanced params), or switch to vlm-transformers.  ￼
-
-If you paste your actual local paths, I’ll generate a ready-to-run mineru.json for your exact directory layout.
+echo
+echo "✅ Done. Output -> $OUTDIR"
+echo "   (Keep $CONFIG_JSON if you want to reuse the same mapping; otherwise it will be auto-deleted on reboot.)"
