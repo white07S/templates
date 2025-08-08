@@ -1,80 +1,132 @@
-import asyncio
+To configure Crush for vLLM (which provides an OpenAI-compatible endpoint), you'll need to create a custom provider configuration. Here's how:
+1. Create the Configuration File
+bashmkdir -p ~/.config/crush
+nano ~/.config/crush/crush.json
+2. Configure vLLM Provider
+Add this configuration to your crush.json:
+json{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "vllm": {
+      "type": "openai",
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "dummy",
+      "models": [
+        {
+          "id": "your-model-name",
+          "name": "Your Model Display Name",
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0,
+          "cost_per_1m_in_cached": 0,
+          "cost_per_1m_out_cached": 0,
+          "context_window": 32768,
+          "default_max_tokens": 4096
+        }
+      ]
+    }
+  }
+}
+3. Common vLLM Configurations
+For local vLLM with default settings:
+json{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "vllm-local": {
+      "type": "openai",
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "dummy",
+      "models": [
+        {
+          "id": "meta-llama/Llama-3.2-3B-Instruct",
+          "name": "Llama 3.2 3B Instruct",
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0,
+          "context_window": 8192,
+          "default_max_tokens": 2048
+        }
+      ]
+    }
+  }
+}
+For remote vLLM server:
+json{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "vllm-remote": {
+      "type": "openai",
+      "base_url": "http://your-server-ip:8000/v1",
+      "api_key": "$VLLM_API_KEY",
+      "models": [
+        {
+          "id": "your-model-name",
+          "name": "Your Remote Model",
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0,
+          "context_window": 32768,
+          "default_max_tokens": 4096
+        }
+      ]
+    }
+  }
+}
+For vLLM with authentication:
+json{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "vllm-auth": {
+      "type": "openai",
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "$VLLM_API_KEY",
+      "extra_headers": {
+        "Authorization": "Bearer $VLLM_TOKEN"
+      },
+      "models": [
+        {
+          "id": "your-model-name",
+          "name": "Your Authenticated Model",
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0,
+          "context_window": 32768,
+          "default_max_tokens": 4096
+        }
+      ]
+    }
+  }
+}
+4. Key Configuration Parameters
+Adjust these based on your vLLM setup:
 
-# Graphiti core
-from graphiti_core import Graphiti
-from graphiti_core.llm_client import LLMClient, LLMConfig
-from graphiti_core.embedder import EmbedderClient
-from graphiti_core.cross_encoder import CrossEncoderClient
+base_url: Your vLLM server endpoint (default: http://localhost:8000/v1)
+api_key: Use "dummy" for local no-auth setups, or "$VLLM_API_KEY" if you have authentication
+id: The exact model name as it appears in vLLM (check with curl http://localhost:8000/v1/models)
+context_window: Your model's context length
+default_max_tokens: Maximum tokens to generate
 
-# LangChain wrappers
-from langchain.chat_models import AzureChatOpenAI
-from langchain_openai import AzureOpenAIEmbeddings
+5. Find Your Model Name
+To get the exact model ID that vLLM is serving:
+bashcurl http://localhost:8000/v1/models
+This will return something like:
+json{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Llama-3.2-3B-Instruct",
+      "object": "model",
+      ...
+    }
+  ]
+}
+Use the "id" value in your configuration.
+6. Set Environment Variables (if needed)
+bash# Only if your vLLM requires authentication
+export VLLM_API_KEY="your-api-key"
+export VLLM_TOKEN="your-bearer-token"
+7. Test the Configuration
+bashcrush
+Then in Crush, you should be able to select your vLLM model from the provider list.
+8. Common vLLM Ports
 
-# ── 1) LangChain → Graphiti LLM Adapter ────────────────────────────────────
-class LangChainLLMClient(LLMClient):
-    def __init__(self, lc_model: AzureChatOpenAI, config: LLMConfig):
-        super().__init__(config)
-        self.lc_model = lc_model
+Default: 8000
+Alternative: 8001, 11434 (for Ollama compatibility)
 
-    async def chat_complete(self, prompt: str, **kwargs) -> str:
-        result = await self.lc_model.agenerate([{"role": "user", "content": prompt}])
-        return result.generations[0][0].text
-
-# ── 2) LangChain → Graphiti Embedder Adapter ────────────────────────────────
-class LangChainEmbedder(EmbedderClient):
-    def __init__(self, lc_embedder: AzureOpenAIEmbeddings):
-        super().__init__()
-        self.lc_embedder = lc_embedder
-
-    async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
-        # Note: LangChain’s embed_documents returns List[List[float]]
-        return self.lc_embedder.embed_documents(input_data_list)
-
-# ── 3) (Optional) LangChain Cross-Encoder via Chat ───────────────────────────
-class LangChainCrossEncoder(CrossEncoderClient):
-    def __init__(self, lc_model: AzureChatOpenAI):
-        self.lc_model = lc_model
-
-    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
-        # Simple reranking: treat each passage as a yes/no question
-        results = []
-        for passage in passages:
-            prompt = (
-                f'PASSAGE: "{passage}"\n\n'
-                f'Is this passage relevant to the query: "{query}"? '
-                'Respond with "True" or "False".'
-            )
-            resp = await self.lc_model.agenerate([{"role":"user","content":prompt}])
-            text = resp.generations[0][0].text.strip().lower()
-            score = 1.0 if text.startswith("true") else 0.0
-            results.append((passage, score))
-        # Sort descending by score
-        return sorted(results, key=lambda x: x[1], reverse=True)
-
-# ── 4) Initialize Graphiti with Adapters ─────────────────────────────────────
-async def main():
-    # LangChain instances pick up AZURE_ env vars under the hood
-    lc_chat  = AzureChatOpenAI(temperature=0)
-    lc_embed = AzureOpenAIEmbeddings(model="text-embedding-3-large")
-
-    graphiti = Graphiti(
-        uri="bolt://localhost:7687",
-        user="neo4j",
-        password="neo4j",
-        llm_client     = LangChainLLMClient(lc_chat, config=LLMConfig()),
-        embedder       = LangChainEmbedder(lc_embed),
-        cross_encoder  = LangChainCrossEncoder(lc_chat),
-    )
-
-    # Sanity check
-    ep = graphiti.create_episode(group_name="demo", data="Testing LangChain adapters.")
-    print("Episode created:", ep)
-
-    hits = graphiti.search(
-        recipe="semantic_node_search",
-        recipe_kwargs={"node_label": None, "query": "Testing adapters"}
-    )
-    print("Search hits:", hits)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+Make sure your base_url matches your vLLM server's actual endpoint!RetryClaude can make mistakes. Please double-check responses.
