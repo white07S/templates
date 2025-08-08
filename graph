@@ -1,132 +1,85 @@
-To configure Crush for vLLM (which provides an OpenAI-compatible endpoint), you'll need to create a custom provider configuration. Here's how:
-1. Create the Configuration File
-bashmkdir -p ~/.config/crush
-nano ~/.config/crush/crush.json
-2. Configure vLLM Provider
-Add this configuration to your crush.json:
-json{
-  "$schema": "https://charm.land/crush.json",
-  "providers": {
-    "vllm": {
-      "type": "openai",
-      "base_url": "http://localhost:8000/v1",
-      "api_key": "dummy",
-      "models": [
-        {
-          "id": "your-model-name",
-          "name": "Your Model Display Name",
-          "cost_per_1m_in": 0,
-          "cost_per_1m_out": 0,
-          "cost_per_1m_in_cached": 0,
-          "cost_per_1m_out_cached": 0,
-          "context_window": 32768,
-          "default_max_tokens": 4096
-        }
-      ]
-    }
-  }
-}
-3. Common vLLM Configurations
-For local vLLM with default settings:
-json{
-  "$schema": "https://charm.land/crush.json",
-  "providers": {
-    "vllm-local": {
-      "type": "openai",
-      "base_url": "http://localhost:8000/v1",
-      "api_key": "dummy",
-      "models": [
-        {
-          "id": "meta-llama/Llama-3.2-3B-Instruct",
-          "name": "Llama 3.2 3B Instruct",
-          "cost_per_1m_in": 0,
-          "cost_per_1m_out": 0,
-          "context_window": 8192,
-          "default_max_tokens": 2048
-        }
-      ]
-    }
-  }
-}
-For remote vLLM server:
-json{
-  "$schema": "https://charm.land/crush.json",
-  "providers": {
-    "vllm-remote": {
-      "type": "openai",
-      "base_url": "http://your-server-ip:8000/v1",
-      "api_key": "$VLLM_API_KEY",
-      "models": [
-        {
-          "id": "your-model-name",
-          "name": "Your Remote Model",
-          "cost_per_1m_in": 0,
-          "cost_per_1m_out": 0,
-          "context_window": 32768,
-          "default_max_tokens": 4096
-        }
-      ]
-    }
-  }
-}
-For vLLM with authentication:
-json{
-  "$schema": "https://charm.land/crush.json",
-  "providers": {
-    "vllm-auth": {
-      "type": "openai",
-      "base_url": "http://localhost:8000/v1",
-      "api_key": "$VLLM_API_KEY",
-      "extra_headers": {
-        "Authorization": "Bearer $VLLM_TOKEN"
-      },
-      "models": [
-        {
-          "id": "your-model-name",
-          "name": "Your Authenticated Model",
-          "cost_per_1m_in": 0,
-          "cost_per_1m_out": 0,
-          "context_window": 32768,
-          "default_max_tokens": 4096
-        }
-      ]
-    }
-  }
-}
-4. Key Configuration Parameters
-Adjust these based on your vLLM setup:
+Short version: Crush tries to download the provider registry on startup. In a locked-down network it can’t reach that URL, so it dies with “failed to load providers.” You have two clean work-arounds:
 
-base_url: Your vLLM server endpoint (default: http://localhost:8000/v1)
-api_key: Use "dummy" for local no-auth setups, or "$VLLM_API_KEY" if you have authentication
-id: The exact model name as it appears in vLLM (check with curl http://localhost:8000/v1/models)
-context_window: Your model's context length
-default_max_tokens: Maximum tokens to generate
+⸻
 
-5. Find Your Model Name
-To get the exact model ID that vLLM is serving:
-bashcurl http://localhost:8000/v1/models
-This will return something like:
-json{
-  "object": "list",
-  "data": [
-    {
-      "id": "meta-llama/Llama-3.2-3B-Instruct",
-      "object": "model",
-      ...
+Option A — Run 100% offline by pointing Crush to a local providers file
+	1.	Create a providers file locally (YAML or JSON—either is fine if you mirror Crush’s schema). Save it somewhere readable, e.g. /etc/crush/providers.yaml or ~/.config/crush/providers.yaml.
+
+Minimal example for an OpenAI-compatible endpoint (vLLM):
+
+providers:
+  - id: local-vllm
+    name: Local vLLM
+    client: openai          # openai-compatible client
+    base_url: http://127.0.0.1:8000/v1
+    api_key_env: OPENAI_API_KEY   # or leave blank if your server ignores it
+    headers: {}              # add custom headers if your gateway requires them
+    models:
+      - id: qwen32b          # your vLLM model name
+        name: Qwen 32B
+        context_window: 32768
+        default_max_tokens: 4096
+        cost_per_1m_in: 0
+        cost_per_1m_out: 0
+        cost_per_1m_in_cached: 0
+        cost_per_1m_out_cached: 0
+
+	2.	Tell Crush to use your local file and skip network (one of these will usually exist in the codebase; try in this order):
+
+	•	CRUSH_PROVIDER_FILE=/etc/crush/providers.yaml crush
+	•	or CRUSH_PROVIDERS_PATH=/etc/crush/providers.yaml crush
+	•	or put it in XDG config so Crush finds it automatically:
+	•	Linux/macOS: ~/.config/crush/providers.yaml
+	•	Windows: %APPDATA%\crush\providers.yaml
+
+	3.	Disable online refresh (again, names vary by version—try the first one, then the next):
+
+	•	CRUSH_SKIP_PROVIDER_UPDATE=1
+	•	or CRUSH_OFFLINE=1
+
+If Crush still tries to call out, set a fake/no-network base URL env (below) or block egress at the process level.
+
+⸻
+
+Option B — Tiny code patch to force offline (most robust in restricted envs)
+
+If your environment policies allow building from source, add a file-based override in internal/config/provider.go. Example pattern:
+
+// at top
+import (
+    "os"
+    "gopkg.in/yaml.v3" // or std json if your file is JSON
+)
+
+func loadProvidersOfflineFirst() (Providers, error) {
+    if p := os.Getenv("CRUSH_PROVIDER_FILE"); p != "" {
+        b, err := os.ReadFile(p)
+        if err != nil { return nil, fmt.Errorf("read providers file: %w", err) }
+
+        var cfg struct{ Providers []Provider `yaml:"providers"` } // match existing types
+        if err := yaml.Unmarshal(b, &cfg); err != nil {
+            return nil, fmt.Errorf("parse providers file: %w", err)
+        }
+        return cfg.Providers, nil
     }
-  ]
+    // fall back to the existing online logic below…
 }
-Use the "id" value in your configuration.
-6. Set Environment Variables (if needed)
-bash# Only if your vLLM requires authentication
-export VLLM_API_KEY="your-api-key"
-export VLLM_TOKEN="your-bearer-token"
-7. Test the Configuration
-bashcrush
-Then in Crush, you should be able to select your vLLM model from the provider list.
-8. Common vLLM Ports
 
-Default: 8000
-Alternative: 8001, 11434 (for Ollama compatibility)
+Then in the existing load function, call loadProvidersOfflineFirst() and return early if it succeeds, so the network path is never hit when CRUSH_PROVIDER_FILE is set. Rebuild the binary and deploy just that.
 
-Make sure your base_url matches your vLLM server's actual endpoint!RetryClaude can make mistakes. Please double-check responses.
+If you truly can’t change code, you can also vendor the providers into the binary with //go:embed providers.yaml and load that first.
+
+⸻
+
+Quick sanity checklist
+	•	Run once with debug logs to confirm it’s using your file:
+	•	CRUSH_DEBUG=1 CRUSH_PROVIDER_FILE=~/.config/crush/providers.yaml CRUSH_SKIP_PROVIDER_UPDATE=1 crush
+	•	Ensure your vLLM server is reachable from that host:
+	•	curl http://127.0.0.1:8000/v1/models
+	•	If you need a key header even locally, set:
+	•	export OPENAI_API_KEY=dummy
+	•	or add headers: {"Authorization": "Bearer dummy"} to your provider entry.
+
+⸻
+
+If you paste the exact error stack and (if possible) the relevant bits of provider.go (the function doing the load), I’ll give you the exact env var name/flag your build expects and the precise YAML/JSON schema Crush is parsing in that version.
