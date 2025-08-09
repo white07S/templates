@@ -77,23 +77,36 @@ def get_agent(session_id: str) -> Agent:
 # ------------------------------------------------------------------
 # Streaming helper — now logs each turn to TinyDB with a timestamp
 # ------------------------------------------------------------------
+# ... keep your imports and setup ...
+
+def _sse(data: dict) -> str:
+    # One SSE message
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+# ------------------------------------------------------------------
+# Streaming helper — SSE + async arun
+# ------------------------------------------------------------------
 async def generate_stream(agent: Agent, query: str,
-                          user_id: str, session_id: str) -> AsyncGenerator[str, None]:
-    response_acc = ""                       # full assistant reply buffer
-    response_stream = agent.run(query, stream=True)
+                          user_id: str, session_id: str):
+    response_acc = ""
+    # NOTE: async streaming (doesn't block the event loop)
+    response_stream = await agent.arun(query, stream=True)
 
     try:
-        for event in response_stream:
-            if event.event == "ToolCallStarted":
-                yield f"🔧 Tool called: {event.tool.tool_name}\n"
-            elif event.event == "ToolCallCompleted":
-                yield f"✅ Tool completed: {event.tool.tool_name}\n"
-            elif event.event == "RunResponseContent" and getattr(event, "content", None):
+        async for event in response_stream:
+            et = getattr(event, "event", None)
+
+            if et == "ToolCallStarted":
+                yield _sse({"type": "tool_start", "name": event.tool.tool_name})
+            elif et == "ToolCallCompleted":
+                yield _sse({"type": "tool_end", "name": event.tool.tool_name})
+            elif et == "RunResponseContent" and getattr(event, "content", None):
                 response_acc += event.content
-                yield event.content
+                # stream as small deltas
+                yield _sse({"type": "content", "delta": event.content})
     finally:
-        # persist this turn
-        timestamp = datetime.now(timezone.utc).isoformat()   # NEW
+        # persist this turn exactly as you had it
+        timestamp = datetime.now(timezone.utc).isoformat()
         turn = {"timestamp": timestamp, "query": query, "response": response_acc}
 
         existing = sessions_table.get(
@@ -108,19 +121,30 @@ async def generate_stream(agent: Agent, query: str,
             sessions_table.insert(
                 {"user_id": user_id, "session_id": session_id, "conversation": [turn]}
             )
+        # tell client we're done
+        yield _sse({"type": "done"})
 
 # ------------------------------------------------------------------
-# API endpoints
+# API endpoint — return proper SSE
 # ------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     try:
         agent = get_agent(req.session_id)
         gen = generate_stream(agent, req.query, req.user_id, req.session_id)
-        return StreamingResponse(gen, media_type="text/plain", )
+        return StreamingResponse(
+            gen,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                # If you ever sit behind nginx, this helps disable buffering:
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.post("/get-all-session-id")
 async def get_all_session_id(req: UserRequest):
     docs = sessions_table.search(SessionQ.user_id == req.user_id)
