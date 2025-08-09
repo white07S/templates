@@ -2,54 +2,60 @@ const BASE_URL = 'http://localhost:8000';
 
 export const api = {
   async streamChat(userId, sessionId, query, onChunk, onToolCall) {
-    const response = await fetch(`${BASE_URL}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        user_id: userId,
-        session_id: sessionId,
-        query: query,
-      }),
-    });
+  const response = await fetch(`${BASE_URL}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream'
+    },
+    body: JSON.stringify({ user_id: userId, session_id: sessionId, query })
+  });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+    buffer += decoder.decode(value, { stream: true });
 
-      for (const line of lines) {
-        if (line.includes('🔧 Tool called:')) {
-          onToolCall && onToolCall(line);
-        } else if (line.includes('✅ Tool completed:')) {
-          onToolCall && onToolCall(line);
-        } else if (line.trim()) {
-          onChunk(line + '\n');
-        }
+    // SSE frames are separated by \n\n
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() || '';
+
+    for (const frame of frames) {
+      if (!frame.startsWith('data:')) continue;
+      const json = frame.slice(5).trim();
+      if (!json) continue;
+
+      const msg = JSON.parse(json);
+      switch (msg.type) {
+        case 'content':
+          onChunk && onChunk(msg.delta);
+          break;
+        case 'tool_start':
+          onToolCall && onToolCall(`🔧 Tool called: ${msg.name}`);
+          break;
+        case 'tool_end':
+          onToolCall && onToolCall(`✅ Tool completed: ${msg.name}`);
+          break;
+        case 'done':
+          // optionally handle completion
+          break;
       }
     }
+  }
 
-    if (buffer.trim()) {
-      if (buffer.includes('🔧') || buffer.includes('✅')) {
-        onToolCall && onToolCall(buffer);
-      } else {
-        onChunk(buffer);
-      }
-    }
-  },
+  // handle any trailing partial frame if needed (usually empty)
+  if (buffer.startsWith('data:')) {
+    const msg = JSON.parse(buffer.slice(5).trim());
+    if (msg.type === 'content') onChunk && onChunk(msg.delta);
+  }
+},
 
   async getAllSessionIds(userId) {
     const response = await fetch(`${BASE_URL}/get-all-session-id`, {
