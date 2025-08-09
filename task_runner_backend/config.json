@@ -1,0 +1,32 @@
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "${OPENAI_API_KEY}",
+    "base_url": null,
+    "temperature": 0.1,
+    "max_tokens": 1000
+  },
+  "tasks": {
+    "summarize": {
+      "description": "Summarize the content of the uploaded file.",
+      "prompt": "summary_prompt.py",
+      "data_cases": {
+        "external_loss": {
+          "description": "This is a loss description outside of UBS company",
+          "mandatory_columns": {
+            "DescriptionOfEvent": "This column represents the description of various events.",
+            "nfr_taxonomy": "This column represents the non-financial risk taxonomy."
+          }
+        },
+        "internal_loss": {
+          "description": "This is a loss description within UBS company",
+          "mandatory_columns": {
+            "DescriptionOfEvent": "This column represents the description of various events.",
+            "nfr_taxonomy": "This column represents the non-financial risk taxonomy."
+          }
+        }
+      }
+    }
+  }
+}

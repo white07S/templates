@@ -1,0 +1,16 @@
+DescriptionOfEvent,nfr_taxonomy,Date,Amount,Location,BusinessUnit
+"Unauthorized access to customer database due to weak password policy in London branch",Cyber Security,2024-01-15,250000,London,Retail Banking
+"Trading system malfunction resulted in incorrect trade execution and client losses",Technology Risk,2024-02-03,500000,New York,Investment Banking
+"Employee fraud involving manipulation of client account balances over 6 months",Internal Fraud,2024-01-22,75000,Singapore,Wealth Management
+"Data breach affecting 10000 customer records due to unpatched security vulnerability",Cyber Security,2024-03-10,180000,Zurich,Technology
+"Operational error in derivatives pricing model led to significant mark-to-market losses",Model Risk,2024-02-28,320000,London,Investment Banking
+"Regulatory fine for inadequate AML controls and suspicious transaction monitoring",Regulatory Compliance,2024-01-30,450000,Frankfurt,Compliance
+"Third-party vendor security incident exposing confidential client information",Third Party Risk,2024-03-05,95000,Hong Kong,Operations
+"Trading floor power outage causing system downtime and missed trading opportunities",Business Continuity,2024-02-14,125000,Tokyo,Trading
+"Incorrect interest rate calculation affecting mortgage customers due to system bug",Technology Risk,2024-01-18,210000,Sydney,Retail Banking
+"Money laundering scheme discovered in private banking division with client involvement",Internal Fraud,2024-03-01,600000,Geneva,Private Banking
+"Market data feed failure resulting in delayed trade settlements and client complaints",Technology Risk,2024-02-20,85000,London,Trading
+"Compliance officer discovered unreported conflicts of interest in investment advisory",Regulatory Compliance,2024-01-25,35000,New York,Investment Advisory
+"Cyber attack on mobile banking platform causing service disruption for 48 hours",Cyber Security,2024-03-08,275000,Dublin,Digital Banking
+"Accounting error in quarterly reporting requiring restatement of financial results",Financial Reporting,2024-02-10,150000,Zurich,Finance
+"Credit risk model validation identified significant bias in default probability calculations",Model Risk,2024-01-12,390000,London,Risk Management
