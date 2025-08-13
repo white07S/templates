@@ -1,0 +1,50 @@
+{
+  "preetam.sharma": {
+    "username": "preetam.sharma",
+    "secret_code": "123456789",
+    "authorized_data_tasks": [
+      {
+        "data_type": "controls",
+        "tasks": [
+          "5Ws extraction",
+          "similarity",
+          "taxonomy_mapping",
+          "root_cause_mapping",
+          "ai_insights"
+        ]
+      },
+      {
+        "data_type": "issues",
+        "tasks": [
+          "taxonomy_mapping",
+          "root_cause_mapping",
+          "ai_insights"
+        ]
+      },
+      {
+        "data_type": "external_loss",
+        "tasks": [
+          "taxonomy_mapping",
+          "root_cause_mapping",
+          "ai_insights"
+        ]
+      },
+      {
+        "data_type": "internal_loss",
+        "tasks": [
+          "taxonomy_mapping",
+          "root_cause_mapping",
+          "ai_insights"
+        ]
+      },
+      {
+        "data_type": "orx_scenarios",
+        "tasks": [
+          "taxonomy_mapping",
+          "root_cause_mapping",
+          "ai_insights"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "task_id": "05751ab2-4d0c-473d-b121-168020dd3b10",
+  "username": "preetam.sharma",
+  "data_type": "issues",
+  "tasks": [
+    "root_cause_mapping",
+    "ai_insights"
+  ],
+  "file_path": "data/tasks/05751ab2-4d0c-473d-b121-168020dd3b10/mock_issues_100.csv",
+  "status": "pending",
+  "submitted_at": "2025-08-02T20:03:17.313567"
+}

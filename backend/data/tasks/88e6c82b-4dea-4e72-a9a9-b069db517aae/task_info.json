@@ -1,0 +1,11 @@
+{
+  "task_id": "88e6c82b-4dea-4e72-a9a9-b069db517aae",
+  "username": "preetam.sharma",
+  "data_type": "controls",
+  "tasks": [
+    "taxonomy_mapping",
+    "ai_insights"
+  ],
+  "file_path": "data/tasks/88e6c82b-4dea-4e72-a9a9-b069db517aae/mock_controls_50.xlsx",
+  "status": "pending"
+}
