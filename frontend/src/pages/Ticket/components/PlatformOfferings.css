@@ -1,0 +1,124 @@
+.platform-offerings {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.offerings-header {
+  text-align: center;
+  margin-bottom: 40px;
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--ubs-gray-medium);
+}
+
+.offerings-header h2 {
+  margin-bottom: 8px;
+}
+
+.offerings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 24px;
+}
+
+.offering-card {
+  background-color: var(--ubs-white);
+  border: 2px solid var(--ubs-gray-medium);
+  padding: 24px;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.offering-card:hover {
+  border-color: var(--ubs-black);
+  box-shadow: var(--shadow-md);
+}
+
+.offering-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.offering-icon {
+  flex-shrink: 0;
+  color: var(--ubs-black);
+  padding: 8px;
+  background-color: var(--ubs-gray-light);
+  border-radius: 8px;
+}
+
+.offering-title h3 {
+  margin-bottom: 4px;
+  color: var(--ubs-black);
+}
+
+.offering-title p {
+  color: var(--ubs-gray-dark);
+  margin: 0;
+}
+
+.offering-tasks {
+  flex: 1;
+  margin-bottom: 20px;
+}
+
+.tasks-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ubs-black);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-item {
+  padding: 12px;
+  background-color: var(--ubs-gray-light);
+  border-radius: 6px;
+}
+
+.task-name {
+  font-weight: 600;
+  color: var(--ubs-black);
+  margin-bottom: 4px;
+}
+
+.task-description {
+  font-size: 13px;
+  color: var(--ubs-gray-dark);
+  line-height: 1.4;
+}
+
+.offering-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--ubs-gray-medium);
+  text-align: center;
+}
+
+.task-count {
+  font-size: 13px;
+  color: var(--ubs-gray-dark);
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .offerings-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .offering-card {
+    padding: 20px;
+  }
+  
+  .offering-header {
+    gap: 12px;
+  }
+}

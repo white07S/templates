@@ -1,0 +1,132 @@
+.task-status {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--ubs-gray-medium);
+}
+
+.status-header h2 {
+  margin-bottom: 8px;
+}
+
+.no-tasks {
+  text-align: center;
+  padding: 48px 24px;
+  background-color: var(--ubs-gray-light);
+  border: 1px solid var(--ubs-gray-medium);
+}
+
+.tasks-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.task-card {
+  border: 2px solid var(--ubs-gray-medium);
+  background-color: var(--ubs-white);
+  padding: 24px;
+  transition: all 0.2s ease;
+}
+
+.task-card:hover {
+  border-color: var(--ubs-black);
+  box-shadow: var(--shadow-md);
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.task-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ubs-black);
+  margin: 0 0 4px;
+}
+
+.task-date {
+  font-size: 12px;
+  color: var(--ubs-gray-dark);
+  margin: 0;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  border: 1px solid;
+}
+
+.status-badge-completed {
+  background-color: #f0f9ff;
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.status-badge-pending {
+  background-color: #fef3c7;
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.status-badge-error {
+  background-color: #fef2f2;
+  border-color: var(--ubs-red);
+  color: var(--ubs-red);
+}
+
+.status-icon-completed {
+  color: #10b981;
+}
+
+.status-icon-pending {
+  color: #f59e0b;
+}
+
+.status-icon-error {
+  color: var(--ubs-red);
+}
+
+.task-details {
+  margin-bottom: 16px;
+}
+
+.detail-row {
+  display: flex;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.detail-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ubs-gray-dark);
+  min-width: 80px;
+}
+
+.detail-value {
+  font-size: 14px;
+  color: var(--ubs-black);
+  flex: 1;
+}
+
+.task-actions {
+  border-top: 1px solid var(--ubs-gray-medium);
+  padding-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}

@@ -1,0 +1,121 @@
+.file-upload {
+  margin-bottom: 24px;
+}
+
+.upload-area {
+  border: 2px dashed var(--ubs-gray-medium);
+  background-color: var(--ubs-gray-light);
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-area:hover:not(.upload-area-disabled) {
+  border-color: var(--ubs-gray-dark);
+  background-color: var(--ubs-white);
+}
+
+.upload-area-active {
+  border-color: var(--ubs-red);
+  background-color: var(--ubs-white);
+}
+
+.upload-area-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.upload-icon {
+  color: var(--ubs-gray-dark);
+  margin-bottom: 16px;
+}
+
+.upload-text {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ubs-black);
+  margin-bottom: 8px;
+}
+
+.upload-hint {
+  font-size: 14px;
+  color: var(--ubs-gray-dark);
+}
+
+.file-preview {
+  border: 2px solid var(--ubs-gray-medium);
+  background-color: var(--ubs-gray-light);
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.file-icon {
+  color: var(--ubs-gray-dark);
+  flex-shrink: 0;
+}
+
+.file-details {
+  flex: 1;
+}
+
+.file-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ubs-black);
+  margin: 0;
+  word-break: break-all;
+}
+
+.file-size {
+  font-size: 12px;
+  color: var(--ubs-gray-dark);
+  margin: 0;
+}
+
+.file-remove {
+  background: none;
+  border: 1px solid var(--ubs-gray-dark);
+  color: var(--ubs-gray-dark);
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.file-remove:hover:not(:disabled) {
+  border-color: var(--ubs-red);
+  color: var(--ubs-red);
+}
+
+.file-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upload-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background-color: #fef2f2;
+  border: 1px solid var(--ubs-red);
+  color: var(--ubs-red);
+  font-size: 14px;
+}

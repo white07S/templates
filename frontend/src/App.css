@@ -1,0 +1,10 @@
+.app {
+  min-height: 100vh;
+  background-color: var(--ubs-white);
+  color: var(--ubs-black);
+}
+
+.main-content {
+  min-height: calc(100vh - 140px);
+  background-color: var(--ubs-white);
+}

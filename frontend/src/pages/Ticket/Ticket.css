@@ -1,0 +1,60 @@
+.ticket-page {
+  min-height: calc(100vh - 200px);
+  padding: 40px 0;
+}
+
+.ticket-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.ticket-header h1 {
+  margin-bottom: 8px;
+}
+
+.ticket-header p {
+  color: var(--ubs-gray-dark);
+}
+
+.ticket-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--ubs-gray-medium);
+  margin-bottom: 32px;
+}
+
+.tab-button {
+  background: none;
+  border: none;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ubs-gray-dark);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.tab-button:hover {
+  color: var(--ubs-black);
+}
+
+.tab-active {
+  color: var(--ubs-red);
+  font-weight: 600;
+}
+
+.tab-active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: var(--ubs-red);
+}
+
+.ticket-content {
+  background-color: var(--ubs-white);
+  border: 1px solid var(--ubs-gray-medium);
+  padding: 32px;
+}

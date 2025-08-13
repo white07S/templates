@@ -1,0 +1,49 @@
+.header {
+  background-color: var(--ubs-white);
+  border-bottom: 3px solid var(--ubs-red);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: var(--shadow-sm);
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+}
+
+.header-logo {
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.header-logo:hover {
+  opacity: 0.8;
+}
+
+.header-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--ubs-black);
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ubs-black);
+  font-size: 14px;
+}
+
+.header-username {
+  font-weight: 600;
+}
