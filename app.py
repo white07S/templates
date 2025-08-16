@@ -1,215 +1,192 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/bin/bash
 
-"""
-pdf_to_markdown_smol_docling.py
+# PostgreSQL Binary Installation Script
+# This script downloads PostgreSQL binaries, installs them, and sets up a data directory
 
-Usage:
-  python pdf_to_markdown_smol_docling.py \
-      --pdf /path/to/file.pdf \
-      --smol /models/ds4sd/SmolDocling-256M-preview \
-      --out ./out_dir \
-      --device cuda \
-      [--caption-model /models/ibm-granite/granite-vision-3.2-2b]
+set -e  # Exit on error
 
-- Forces local model usage (offline).
-- Runs SmolDocling VLM page-by-page and exports Markdown.
-- Optionally adds picture descriptions (captions) using a local VLM for images.
-"""
+# Configuration Variables
+POSTGRES_VERSION="16.2"
+INSTALL_DIR="$HOME/postgresql"
+DATA_DIR="$HOME/postgresql_data"
+PORT=5432
+OS_TYPE=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
 
-import os
-from pathlib import Path
-import argparse
-from typing import Optional
+# Determine the correct binary package
+if [ "$OS_TYPE" = "linux" ]; then
+    if [ "$ARCH" = "x86_64" ]; then
+        POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}-1-linux-x64-binaries.tar.gz"
+        DOWNLOAD_URL="https://get.enterprisedb.com/postgresql/${POSTGRES_PACKAGE}"
+    else
+        echo "Architecture $ARCH not supported in this script"
+        exit 1
+    fi
+elif [ "$OS_TYPE" = "darwin" ]; then
+    POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}-1-osx-binaries.zip"
+    DOWNLOAD_URL="https://get.enterprisedb.com/postgresql/${POSTGRES_PACKAGE}"
+else
+    echo "OS $OS_TYPE not supported"
+    exit 1
+fi
 
-# --- force offline/local-only ---
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
+echo "========================================="
+echo "PostgreSQL Binary Installation Script"
+echo "========================================="
+echo "Version: $POSTGRES_VERSION"
+echo "Install Directory: $INSTALL_DIR"
+echo "Data Directory: $DATA_DIR"
+echo "Port: $PORT"
+echo "========================================="
 
-from docling.datamodel.base_models import InputFormat
-from docling.document_converter import DocumentConverter, PdfFormatOption, ConversionResult
+# Create directories
+echo "Creating directories..."
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$DATA_DIR"
 
-# VLM (SmolDocling) pipeline
-from docling.pipeline.vlm_pipeline import VlmPipeline
-from docling.datamodel.pipeline_options import VlmPipelineOptions
-from docling.datamodel.pipeline_options_vlm_model import (
-    InlineVlmOptions,
-    InferenceFramework,
-    TransformersModelType,
-    ResponseFormat,
-)
+# Download PostgreSQL binaries
+echo "Downloading PostgreSQL $POSTGRES_VERSION..."
+cd /tmp
+if [ ! -f "$POSTGRES_PACKAGE" ]; then
+    curl -L -o "$POSTGRES_PACKAGE" "$DOWNLOAD_URL" || wget -O "$POSTGRES_PACKAGE" "$DOWNLOAD_URL"
+else
+    echo "Package already downloaded, using existing file..."
+fi
 
-# Accelerator options (CUDA/MPS/CPU)
-from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
+# Extract binaries
+echo "Extracting PostgreSQL binaries..."
+if [[ "$POSTGRES_PACKAGE" == *.tar.gz ]]; then
+    tar -xzf "$POSTGRES_PACKAGE" -C "$INSTALL_DIR" --strip-components=1
+elif [[ "$POSTGRES_PACKAGE" == *.zip ]]; then
+    unzip -q "$POSTGRES_PACKAGE" -d "$INSTALL_DIR"
+    mv "$INSTALL_DIR"/pgsql/* "$INSTALL_DIR"
+    rmdir "$INSTALL_DIR/pgsql"
+fi
 
-# Export helpers (save images & markdown)
-from docling_core.types.doc import ImageRefMode
+# Set up environment variables
+echo "Setting up environment variables..."
+export PATH="$INSTALL_DIR/bin:$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
+export PGDATA="$DATA_DIR"
 
-# (Optional) captioning enrichment in a second pass (local VLM)
-from docling.datamodel.pipeline_options import (
-    PdfPipelineOptions,
-    PictureDescriptionVlmOptions,
-)
+# Initialize the database cluster
+echo "Initializing database cluster..."
+"$INSTALL_DIR/bin/initdb" -D "$DATA_DIR" --encoding=UTF8 --locale=C
 
+# Configure PostgreSQL
+echo "Configuring PostgreSQL..."
+cat >> "$DATA_DIR/postgresql.conf" << EOF
 
-def run_smol_vlm_local(
-    pdf_path: Path,
-    smol_model_path: Path,
-    out_dir: Path,
-    device: str = "cuda",
-    images_scale: float = 2.0,
-) -> ConversionResult:
-    """
-    Convert PDF with local SmolDocling (Transformers), page-by-page.
-    Generates picture images so they can be referenced in Markdown.
-    """
-    if device.lower() == "cuda":
-        accel = AcceleratorOptions(device=AcceleratorDevice.CUDA)
-    elif device.lower() == "mps":
-        accel = AcceleratorOptions(device=AcceleratorDevice.MPS)
-    else:
-        accel = AcceleratorOptions(device=AcceleratorDevice.CPU)
+# Custom Configuration
+listen_addresses = 'localhost'
+port = $PORT
+max_connections = 100
+shared_buffers = 128MB
+EOF
 
-    # Tell Docling to use a local HF repository folder for the VLM
-    vlm_opts = InlineVlmOptions(
-        repo_id=str(smol_model_path),                    # local folder
-        response_format=ResponseFormat.DOCTAGS,         # SmolDocling's native format
-        inference_framework=InferenceFramework.TRANSFORMERS,
-        transformers_model_type=TransformersModelType.AUTOMODEL_VISION2SEQ,
-        supported_devices=[AcceleratorDevice.CUDA, AcceleratorDevice.CPU, AcceleratorDevice.MPS],
-        scale=images_scale,
-        temperature=0.0,
-    )
+# Configure authentication
+echo "Configuring authentication..."
+cat > "$DATA_DIR/pg_hba.conf" << EOF
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+EOF
 
-    pipe_opts = VlmPipelineOptions(
-        vlm_options=vlm_opts,
-        accelerator_options=accel,
-        images_scale=images_scale,
-        generate_picture_images=True,   # needed so figures are exported/linked
-        generate_page_images=False,
-    )
+# Start PostgreSQL
+echo "Starting PostgreSQL server..."
+"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" -l "$DATA_DIR/logfile" start
 
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_cls=VlmPipeline,
-                pipeline_options=pipe_opts,
-            )
-        }
-    )
+# Wait for server to start
+echo "Waiting for server to start..."
+sleep 5
 
-    conv_res = converter.convert(pdf_path)
+# Create a test database and user
+echo "Creating test database and user..."
+"$INSTALL_DIR/bin/createdb" -p $PORT testdb
+"$INSTALL_DIR/bin/psql" -p $PORT -d postgres -c "CREATE USER testuser WITH PASSWORD 'testpass';"
+"$INSTALL_DIR/bin/psql" -p $PORT -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE testdb TO testuser;"
 
-    # Save per-page Markdown (iterating pages) + a full-document Markdown
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = conv_res.input.file.stem
+# Install pgvector extension (if needed)
+echo "Attempting to install pgvector..."
+cd /tmp
+git clone --branch v0.6.0 https://github.com/pgvector/pgvector.git 2>/dev/null || true
+if [ -d "pgvector" ]; then
+    cd pgvector
+    export PG_CONFIG="$INSTALL_DIR/bin/pg_config"
+    make clean
+    make
+    make install
+    "$INSTALL_DIR/bin/psql" -p $PORT -d testdb -c "CREATE EXTENSION IF NOT EXISTS vector;"
+    echo "pgvector extension installed successfully"
+else
+    echo "Could not clone pgvector repository. You may need to install it manually."
+fi
 
-    # Full-document markdown with externally referenced images
-    md_all = out_dir / f"{stem}.md"
-    conv_res.document.save_as_markdown(md_all, image_mode=ImageRefMode.REFERENCED)
+# Create start/stop scripts
+echo "Creating management scripts..."
 
-    # Also dump page-wise markdown (simple split by page)
-    # We stream items by page and write a minimal page header.
-    for page_no, page in conv_res.document.pages.items():
-        md_page = out_dir / f"{stem}-page-{page_no}.md"
-        with md_page.open("w", encoding="utf-8") as fp:
-            fp.write(f"# Page {page_no}\n\n")
-            # Walk items that belong to this page and print as markdown fragments
-            for item, _lvl in conv_res.document.iterate_items():
-                # every item has provenance; check page number match
-                try:
-                    prov = item.prov[0]
-                    if getattr(prov, "page_no", None) != page_no:
-                        continue
-                except Exception:
-                    continue
-                # Append each item's own markdown (Docling will render headings, text, tables, pictures)
-                fp.write(item.to_markdown(doc=conv_res.document))
-                fp.write("\n\n")
+# Start script
+cat > "$INSTALL_DIR/start_postgres.sh" << EOF
+#!/bin/bash
+export PATH="$INSTALL_DIR/bin:\$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
+export PGDATA="$DATA_DIR"
+"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" -l "$DATA_DIR/logfile" start
+EOF
+chmod +x "$INSTALL_DIR/start_postgres.sh"
 
-    return conv_res
+# Stop script
+cat > "$INSTALL_DIR/stop_postgres.sh" << EOF
+#!/bin/bash
+export PATH="$INSTALL_DIR/bin:\$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
+export PGDATA="$DATA_DIR"
+"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" stop
+EOF
+chmod +x "$INSTALL_DIR/stop_postgres.sh"
 
+# Status script
+cat > "$INSTALL_DIR/status_postgres.sh" << EOF
+#!/bin/bash
+export PATH="$INSTALL_DIR/bin:\$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
+export PGDATA="$DATA_DIR"
+"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" status
+EOF
+chmod +x "$INSTALL_DIR/status_postgres.sh"
 
-def add_picture_descriptions_with_local_vlm(
-    pdf_path: Path,
-    out_dir: Path,
-    device: str,
-    caption_model_path: Path,
-    images_scale: float = 2.0,
-) -> ConversionResult:
-    """
-    Optional: run a light second pass to add picture descriptions (captions) using a LOCAL VLM
-    like Granite Vision or SmolVLM, then export Markdown with captions included.
+# Create environment setup script
+cat > "$INSTALL_DIR/setup_env.sh" << EOF
+#!/bin/bash
+export PATH="$INSTALL_DIR/bin:\$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
+export PGDATA="$DATA_DIR"
+export PGPORT=$PORT
+export PGHOST=localhost
+echo "PostgreSQL environment variables set."
+echo "PATH includes: $INSTALL_DIR/bin"
+echo "PGDATA: $DATA_DIR"
+echo "PGPORT: $PORT"
+EOF
+chmod +x "$INSTALL_DIR/setup_env.sh"
 
-    This uses Docling's picture-description enrichment config. (Runs offline; repo_id points to a local folder.)
-    """
-    if device.lower() == "cuda":
-        accel = AcceleratorOptions(device=AcceleratorDevice.CUDA)
-    elif device.lower() == "mps":
-        accel = AcceleratorOptions(device=AcceleratorDevice.MPS)
-    else:
-        accel = AcceleratorOptions(device=AcceleratorDevice.CPU)
-
-    pic_vlm = PictureDescriptionVlmOptions(
-        repo_id=str(caption_model_path),  # local folder for Granite Vision / SmolVLM
-        scale=images_scale,
-        prompt="Describe the image in 1–3 concise, factual sentences.",
-    )
-
-    pdf_opts = PdfPipelineOptions()
-    pdf_opts.accelerator_options = accel
-    pdf_opts.images_scale = images_scale
-    pdf_opts.generate_picture_images = True
-    pdf_opts.do_picture_description = True
-    pdf_opts.picture_description_options = pic_vlm
-
-    converter = DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
-    )
-    conv_res = converter.convert(pdf_path)
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = conv_res.input.file.stem
-
-    # Markdown with externally referenced pictures (captions will be embedded as text)
-    md_with_caps = out_dir / f"{stem}.captions.md"
-    conv_res.document.save_as_markdown(md_with_caps, image_mode=ImageRefMode.REFERENCED)
-
-    return conv_res
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", required=True, type=Path, help="Path to input PDF")
-    ap.add_argument("--smol", required=True, type=Path, help="Local folder of ds4sd/SmolDocling-256M-preview")
-    ap.add_argument("--out", required=True, type=Path, help="Output directory")
-    ap.add_argument("--device", default="cuda", choices=["cuda", "mps", "cpu"], help="Accelerator")
-    ap.add_argument("--caption-model", type=Path, default=None,
-                    help="(Optional) local folder of a caption VLM (e.g., ibm-granite/granite-vision-3.2-2b or HuggingFaceTB/SmolVLM-256M-Instruct)")
-    ap.add_argument("--scale", type=float, default=2.0, help="Raster scale used for page/picture images")
-    args = ap.parse_args()
-
-    # Pass 1: SmolDocling VLM (full extraction)
-    smol_res = run_smol_vlm_local(
-        pdf_path=args.pdf,
-        smol_model_path=args.smol,
-        out_dir=args.out,
-        device=args.device,
-        images_scale=args.scale,
-    )
-
-    # Pass 2 (optional): caption pictures with a local small VLM
-    if args.caption_model is not None:
-        add_picture_descriptions_with_local_vlm(
-            pdf_path=args.pdf,
-            out_dir=args.out,
-            device=args.device,
-            caption_model_path=args.caption_model,
-            images_scale=args.scale,
-        )
-
-    print(f"[OK] Wrote Markdown(s) in: {args.out.resolve()}")
-
-
-if __name__ == "__main__":
-    main()
+echo "========================================="
+echo "PostgreSQL Installation Complete!"
+echo "========================================="
+echo "Installation directory: $INSTALL_DIR"
+echo "Data directory: $DATA_DIR"
+echo "Port: $PORT"
+echo ""
+echo "Management scripts created:"
+echo "  Start:  $INSTALL_DIR/start_postgres.sh"
+echo "  Stop:   $INSTALL_DIR/stop_postgres.sh"
+echo "  Status: $INSTALL_DIR/status_postgres.sh"
+echo "  Environment: source $INSTALL_DIR/setup_env.sh"
+echo ""
+echo "To use PostgreSQL commands, run:"
+echo "  source $INSTALL_DIR/setup_env.sh"
+echo ""
+echo "Test connection:"
+echo "  psql -p $PORT -d testdb -U testuser"
+echo "========================================="
