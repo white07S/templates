@@ -1,181 +1,141 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Install PostgreSQL from a local source tarball and build pgvector
+# Usage:
+#   ./install_postgres_from_tar.sh \
+#     --tar /path/to/postgresql-16.2.tar.gz \
+#     --prefix "$HOME/postgresql" \
+#     --data "$HOME/postgresql_data" \
+#     --port 5432 \
+#     [--pgvector-tag v0.8.0]
+#
+# Notes:
+# - Expects a *source* tarball like postgresql-16.2.tar.gz (not a prebuilt binary)
+# - Builds and installs pgvector using PGXS with your new pg_config
+# - Does not start the server (use the second script)
 
-# PostgreSQL Binary Installation Script
-# This script downloads PostgreSQL binaries, installs them, and sets up a data directory
+set -euo pipefail
 
-set -e  # Exit on error
+# Defaults
+TARBALL=""
+PREFIX="${HOME}/postgresql"
+DATA_DIR="${HOME}/postgresql_data"
+PORT="5432"
+PGVECTOR_TAG="v0.8.0"   # latest widely-available as of late 2024–2025
 
-# Configuration Variables
-POSTGRES_VERSION="16.2"
-INSTALL_DIR="$HOME/postgresql"
-DATA_DIR="$HOME/postgresql_data"
-PORT=5432
-OS_TYPE=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tar)           TARBALL="$2"; shift 2;;
+    --prefix)        PREFIX="$2"; shift 2;;
+    --data|--data-dir) DATA_DIR="$2"; shift 2;;
+    --port)          PORT="$2"; shift 2;;
+    --pgvector-tag)  PGVECTOR_TAG="$2"; shift 2;;
+    -h|--help)
+      grep -E '^# (Usage|Notes):' "$0" | sed 's/^# //'; exit 0;;
+    *) echo "Unknown arg: $1"; exit 1;;
+  esac
+done
 
-# Determine the correct binary package
-# Linux: use source tarball
-POSTGRES_VERSION="16.2"
-POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}.tar.gz"
-DOWNLOAD_URL="https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/${POSTGRES_PACKAGE}"
-
-echo "========================================="
-echo "PostgreSQL Binary Installation Script"
-echo "========================================="
-echo "Version: $POSTGRES_VERSION"
-echo "Install Directory: $INSTALL_DIR"
-echo "Data Directory: $DATA_DIR"
-echo "Port: $PORT"
-echo "========================================="
-
-# Create directories
-echo "Creating directories..."
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$DATA_DIR"
-
-# Download PostgreSQL binaries
-echo "Downloading PostgreSQL $POSTGRES_VERSION..."
-cd /tmp
-if [ ! -f "$POSTGRES_PACKAGE" ]; then
-    curl -L -o "$POSTGRES_PACKAGE" "$DOWNLOAD_URL" || wget -O "$POSTGRES_PACKAGE" "$DOWNLOAD_URL"
-else
-    echo "Package already downloaded, using existing file..."
+if [[ -z "${TARBALL}" ]]; then
+  echo "ERROR: --tar /path/to/postgresql-XX.Y.tar.gz is required" >&2
+  exit 1
+fi
+if [[ ! -f "${TARBALL}" ]]; then
+  echo "ERROR: tarball not found: ${TARBALL}" >&2
+  exit 1
 fi
 
-# Extract binaries
-echo "Extracting PostgreSQL binaries..."
-if [[ "$POSTGRES_PACKAGE" == *.tar.gz ]]; then
-    tar -xzf "$POSTGRES_PACKAGE" -C "$INSTALL_DIR" --strip-components=1
-elif [[ "$POSTGRES_PACKAGE" == *.zip ]]; then
-    unzip -q "$POSTGRES_PACKAGE" -d "$INSTALL_DIR"
-    mv "$INSTALL_DIR"/pgsql/* "$INSTALL_DIR"
-    rmdir "$INSTALL_DIR/pgsql"
+echo "==> Installing PostgreSQL from: ${TARBALL}"
+echo "    Prefix: ${PREFIX}"
+echo "    Data:   ${DATA_DIR}"
+echo "    Port:   ${PORT}"
+echo "    pgvector tag: ${PGVECTOR_TAG}"
+
+# Basic build sanity checks
+command -v gcc >/dev/null || { echo "ERROR: gcc not found. Install build tools (e.g., build-essential)"; exit 1; }
+command -v make >/dev/null || { echo "ERROR: make not found."; exit 1; }
+command -v git  >/dev/null || { echo "ERROR: git not found."; exit 1; }
+
+# Create dirs
+mkdir -p "${PREFIX}" "${DATA_DIR}"
+
+# Extract sources to a temp build dir
+BUILD_ROOT="$(mktemp -d /tmp/pgsrc.XXXXXX)"
+trap 'rm -rf "${BUILD_ROOT}"' EXIT
+tar -xzf "${TARBALL}" -C "${BUILD_ROOT}"
+SRCDIR="$(find "${BUILD_ROOT}" -maxdepth 1 -type d -name "postgresql-*.*" | head -n1)"
+if [[ -z "${SRCDIR}" ]]; then
+  echo "ERROR: could not find extracted source dir" >&2
+  exit 1
 fi
 
-# Set up environment variables
-echo "Setting up environment variables..."
-export PATH="$INSTALL_DIR/bin:$PATH"
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
-export PGDATA="$DATA_DIR"
+# Build & install PostgreSQL (per official docs)
+pushd "${SRCDIR}" >/dev/null
+./configure --prefix="${PREFIX}"
+make -j"$(nproc)"
+make install
+popd >/dev/null
 
-# Initialize the database cluster
-echo "Initializing database cluster..."
-"$INSTALL_DIR/bin/initdb" -D "$DATA_DIR" --encoding=UTF8 --locale=C
+# Add contrib (optional but useful)
+if [[ -d "${SRCDIR}/contrib" ]]; then
+  pushd "${SRCDIR}/contrib" >/dev/null
+  make -j"$(nproc)"
+  make install
+  popd >/dev/null
+fi
 
-# Configure PostgreSQL
-echo "Configuring PostgreSQL..."
-cat >> "$DATA_DIR/postgresql.conf" << EOF
+# Environment file
+SETUP_ENV="${PREFIX}/setup_env.sh"
+cat > "${SETUP_ENV}" <<EOF
+#!/usr/bin/env bash
+export PATH="${PREFIX}/bin:\$PATH"
+export LD_LIBRARY_PATH="${PREFIX}/lib:\${LD_LIBRARY_PATH:-}"
+export PGDATA="${DATA_DIR}"
+export PGPORT=${PORT}
+export PGHOST=localhost
+echo "Environment set: PGDATA=\$PGDATA PGPORT=\$PGPORT PATH includes ${PREFIX}/bin"
+EOF
+chmod +x "${SETUP_ENV}"
+
+# Initialize cluster if empty
+if [[ -z "$(ls -A "${DATA_DIR}" 2>/dev/null || true)" ]]; then
+  echo "==> Initializing database cluster at ${DATA_DIR}"
+  "${PREFIX}/bin/initdb" -D "${DATA_DIR}" --encoding=UTF8 --locale=C
+fi
+
+# Minimal config
+PG_CONF="${DATA_DIR}/postgresql.conf"
+if ! grep -q "^port\s*=\s*${PORT}" "${PG_CONF}"; then
+  cat >> "${PG_CONF}" <<EOF
 
 # Custom Configuration
 listen_addresses = 'localhost'
-port = $PORT
+port = ${PORT}
 max_connections = 100
 shared_buffers = 128MB
 EOF
+fi
 
-# Configure authentication
-echo "Configuring authentication..."
-cat > "$DATA_DIR/pg_hba.conf" << EOF
+# Trust local connections for easy dev usage
+cat > "${DATA_DIR}/pg_hba.conf" <<'EOF'
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   all             all                                     trust
 host    all             all             127.0.0.1/32            trust
 host    all             all             ::1/128                 trust
 EOF
 
-# Start PostgreSQL
-echo "Starting PostgreSQL server..."
-"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" -l "$DATA_DIR/logfile" start
+# Build & install pgvector against the new pg_config (per README)
+echo "==> Building pgvector (${PGVECTOR_TAG})"
+export PG_CONFIG="${PREFIX}/bin/pg_config"
+pushd /tmp >/dev/null
+rm -rf pgvector
+git clone --branch "${PGVECTOR_TAG}" https://github.com/pgvector/pgvector.git
+cd pgvector
+make -j"$(nproc)"
+make install
+popd >/div/null 2>/dev/null || popd >/dev/null # tolerate subshells
 
-# Wait for server to start
-echo "Waiting for server to start..."
-sleep 5
-
-# Create a test database and user
-echo "Creating test database and user..."
-"$INSTALL_DIR/bin/createdb" -p $PORT testdb
-"$INSTALL_DIR/bin/psql" -p $PORT -d postgres -c "CREATE USER testuser WITH PASSWORD 'testpass';"
-"$INSTALL_DIR/bin/psql" -p $PORT -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE testdb TO testuser;"
-
-# Install pgvector extension (if needed)
-echo "Attempting to install pgvector..."
-cd /tmp
-git clone --branch v0.6.0 https://github.com/pgvector/pgvector.git 2>/dev/null || true
-if [ -d "pgvector" ]; then
-    cd pgvector
-    export PG_CONFIG="$INSTALL_DIR/bin/pg_config"
-    make clean
-    make
-    make install
-    "$INSTALL_DIR/bin/psql" -p $PORT -d testdb -c "CREATE EXTENSION IF NOT EXISTS vector;"
-    echo "pgvector extension installed successfully"
-else
-    echo "Could not clone pgvector repository. You may need to install it manually."
-fi
-
-# Create start/stop scripts
-echo "Creating management scripts..."
-
-# Start script
-cat > "$INSTALL_DIR/start_postgres.sh" << EOF
-#!/bin/bash
-export PATH="$INSTALL_DIR/bin:\$PATH"
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
-export PGDATA="$DATA_DIR"
-"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" -l "$DATA_DIR/logfile" start
-EOF
-chmod +x "$INSTALL_DIR/start_postgres.sh"
-
-# Stop script
-cat > "$INSTALL_DIR/stop_postgres.sh" << EOF
-#!/bin/bash
-export PATH="$INSTALL_DIR/bin:\$PATH"
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
-export PGDATA="$DATA_DIR"
-"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" stop
-EOF
-chmod +x "$INSTALL_DIR/stop_postgres.sh"
-
-# Status script
-cat > "$INSTALL_DIR/status_postgres.sh" << EOF
-#!/bin/bash
-export PATH="$INSTALL_DIR/bin:\$PATH"
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
-export PGDATA="$DATA_DIR"
-"$INSTALL_DIR/bin/pg_ctl" -D "$DATA_DIR" status
-EOF
-chmod +x "$INSTALL_DIR/status_postgres.sh"
-
-# Create environment setup script
-cat > "$INSTALL_DIR/setup_env.sh" << EOF
-#!/bin/bash
-export PATH="$INSTALL_DIR/bin:\$PATH"
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:\$LD_LIBRARY_PATH"
-export PGDATA="$DATA_DIR"
-export PGPORT=$PORT
-export PGHOST=localhost
-echo "PostgreSQL environment variables set."
-echo "PATH includes: $INSTALL_DIR/bin"
-echo "PGDATA: $DATA_DIR"
-echo "PGPORT: $PORT"
-EOF
-chmod +x "$INSTALL_DIR/setup_env.sh"
-
-echo "========================================="
-echo "PostgreSQL Installation Complete!"
-echo "========================================="
-echo "Installation directory: $INSTALL_DIR"
-echo "Data directory: $DATA_DIR"
-echo "Port: $PORT"
-echo ""
-echo "Management scripts created:"
-echo "  Start:  $INSTALL_DIR/start_postgres.sh"
-echo "  Stop:   $INSTALL_DIR/stop_postgres.sh"
-echo "  Status: $INSTALL_DIR/status_postgres.sh"
-echo "  Environment: source $INSTALL_DIR/setup_env.sh"
-echo ""
-echo "To use PostgreSQL commands, run:"
-echo "  source $INSTALL_DIR/setup_env.sh"
-echo ""
-echo "Test connection:"
-echo "  psql -p $PORT -d testdb -U testuser"
-echo "========================================="
+echo "==> Done."
+echo "Next steps:"
+echo "  1) source ${SETUP_ENV}"
+echo "  2) Use ./start_and_list_tables.sh to start and verify (creates extension in DB)"
