@@ -139,3 +139,84 @@ echo "==> Done."
 echo "Next steps:"
 echo "  1) source ${SETUP_ENV}"
 echo "  2) Use ./start_and_list_tables.sh to start and verify (creates extension in DB)"
+
+
+
+#!/usr/bin/env bash
+# Start PostgreSQL, ensure pgvector is enabled in the target DB, and print table names.
+# Usage:
+#   ./start_and_list_tables.sh [--env /path/to/setup_env.sh] [--db testdb] [--user $USER]
+#
+# Behavior:
+# - Starts the server with pg_ctl
+# - Waits until ready
+# - Creates the DB if it doesn't exist
+# - Ensures CREATE EXTENSION vector in that DB
+# - Prints non-system table names (schema.table)
+
+set -euo pipefail
+
+ENV_FILE=""
+DBNAME="testdb"
+DBUSER="${USER:-$(id -un)}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env) ENV_FILE="$2"; shift 2;;
+    --db)  DBNAME="$2"; shift 2;;
+    --user) DBUSER="$2"; shift 2;;
+    -h|--help)
+      grep -E '^# (Usage|Behavior):' "$0" | sed 's/^# //'; exit 0;;
+    *) echo "Unknown arg: $1"; exit 1;;
+  endac
+done
+
+# Load environment
+if [[ -n "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+elif [[ -f "${HOME}/postgresql/setup_env.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "${HOME}/postgresql/setup_env.sh"
+else
+  echo "ERROR: Could not find setup_env.sh. Pass --env /path/to/setup_env.sh" >&2
+  exit 1
+fi
+
+BIN="${PATH%%:*}"  # first path is usually ${PREFIX}/bin due to setup_env
+if [[ ! -x "${BIN}/pg_ctl" ]]; then
+  echo "ERROR: pg_ctl not found in PATH. Did you source setup_env.sh?" >&2
+  exit 1
+fi
+
+# Start server if not running
+if ! "${BIN}/pg_ctl" -D "${PGDATA}" status >/dev/null 2>&1; then
+  echo "==> Starting PostgreSQL..."
+  "${BIN}/pg_ctl" -D "${PGDATA}" -l "${PGDATA}/logfile" start
+fi
+
+# Wait until ready
+echo "==> Waiting for server to be ready on ${PGHOST:-localhost}:${PGPORT:-5432} ..."
+for _ in {1..30}; do
+  if "${BIN}/pg_isready" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+"${BIN}/pg_isready"
+
+# Create DB if missing
+if ! "${BIN}/psql" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${DBNAME}'" | grep -q 1; then
+  echo "==> Creating database: ${DBNAME}"
+  "${BIN}/createdb" -O "${DBUSER}" "${DBNAME}"
+fi
+
+# Ensure pgvector extension in the DB (per README: CREATE EXTENSION vector;)
+echo "==> Ensuring pgvector extension exists in ${DBNAME}"
+"${BIN}/psql" -d "${DBNAME}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# Print non-system tables (schema.table)
+echo "==> Listing tables in ${DBNAME} (excluding system schemas)"
+SQL="SELECT schemaname || '.' || tablename
+     FROM pg_tables
+     WHERE schemaname NOT IN ('pg_catalog','information_schema')
+     ORDER BY 1;"
+"${BIN}/psql" -d "${DBNAME}" -At -c "${SQL}" || true
