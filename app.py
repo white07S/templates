@@ -14,21 +14,10 @@ OS_TYPE=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 # Determine the correct binary package
-if [ "$OS_TYPE" = "linux" ]; then
-    if [ "$ARCH" = "x86_64" ]; then
-        POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}-1-linux-x64-binaries.tar.gz"
-        DOWNLOAD_URL="https://get.enterprisedb.com/postgresql/${POSTGRES_PACKAGE}"
-    else
-        echo "Architecture $ARCH not supported in this script"
-        exit 1
-    fi
-elif [ "$OS_TYPE" = "darwin" ]; then
-    POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}-1-osx-binaries.zip"
-    DOWNLOAD_URL="https://get.enterprisedb.com/postgresql/${POSTGRES_PACKAGE}"
-else
-    echo "OS $OS_TYPE not supported"
-    exit 1
-fi
+# Linux: use source tarball
+POSTGRES_VERSION="16.2"
+POSTGRES_PACKAGE="postgresql-${POSTGRES_VERSION}.tar.gz"
+DOWNLOAD_URL="https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/${POSTGRES_PACKAGE}"
 
 echo "========================================="
 echo "PostgreSQL Binary Installation Script"
