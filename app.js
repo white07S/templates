@@ -14,3 +14,5 @@
     "longContextThreshold": 60000,
     "webSearch": ""
   }
+
+CUDA_VISIBLE_DEVICES=0 MILVUSCONF=/etc/milvus/configs /usr/bin/milvus run standalone
