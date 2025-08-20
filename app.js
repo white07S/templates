@@ -103,3 +103,6 @@ If you’d rather not manage them yourself, the Docker Compose bundle is easier 
 ⸻
 
 Do you want me to write you a combined script that sets up etcd + MinIO + Milvus (all under /srv/milvus-store), so you don’t have to wire them manually every time?
+
+
+	CUDA_VISIBLE_DEVICES=0 MILVUSCONF=/etc/milvus/configs /usr/bin/milvus run standalone
