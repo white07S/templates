@@ -1,5 +1,67 @@
 Good you asked — this trips up a lot of people.
+Good question 👍
 
+When you install Milvus Standalone from the .deb package, it expects a few system-level dependencies already present. The error you’re seeing (libopenblas0 is not installed) is because Milvus relies on BLAS/LAPACK for vector math.
+
+Here’s a checklist of prerequisites you should have before installing the Milvus .deb package:
+
+⸻
+
+✅ System Dependencies
+
+Install these before running the .deb:
+
+sudo apt-get update
+
+# Math libraries
+sudo apt-get install -y libopenblas0 liblapack3
+
+# C++ runtime libraries
+sudo apt-get install -y libgomp1 libstdc++6
+
+# Networking + utilities
+sudo apt-get install -y curl wget ca-certificates
+
+
+⸻
+
+✅ Milvus-specific runtime
+	•	Etcd – Milvus uses etcd for metadata. The standalone .deb might bundle it, but in many setups you need it separately.
+	•	MinIO (or other object storage) – for vector data persistence. In standalone .deb, it usually expects MinIO or local storage.
+	•	Docker/Podman (optional) – not needed for .deb, only for containerized install.
+
+⸻
+
+✅ Python client (if you plan to interact locally)
+
+pip install pymilvus
+
+
+⸻
+
+🔍 Verify your missing dependency
+
+Run:
+
+ldd /usr/bin/milvus  | grep "not found"
+
+This will show all missing libraries that you need to install.
+
+⸻
+
+👉 My recommendation: start with installing libopenblas0 to fix your current issue:
+
+sudo apt-get install -y libopenblas0
+
+
+⸻
+
+Do you want me to prepare a complete install script that sets up all dependencies + Milvus standalone from .deb in one go?
+
+
+----------
+
+	nohup /usr/bin/milvus run standalone > milvus.log 2>&1 &
 👉 Milvus itself does not install MinIO or etcd when you install from the RPM/DEB binary package.
 
 Here’s the breakdown:
