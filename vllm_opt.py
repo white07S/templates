@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""
+auto_tune_vllm.py
+Searches vLLM serve params to maximize throughput (tokens/sec) under a fixed synthetic load.
+
+Usage (example):
+  python auto_tune_vllm.py \
+    --model /models/Qwen/Qwen2.5-32B-Instruct \
+    --port 8000 \
+    --rps 40 \
+    --duration_s 45 \
+    --warmup_s 10 \
+    --trial_timeout_s 180 \
+    --max_trials 50 \
+    --prompt "Write a 120-word answer about GPU scheduling." \
+    --max_output_tokens 256 \
+    --tensor_parallel_auto \
+    --enable_chunked_prefill \
+    --extra_serve_args "--disable-log-requests --disable-log-stats"
+
+If Optuna is installed, it uses Optuna TPE. Otherwise does random search.
+
+Tested against vLLM >= 0.5.x. Adjust flags to match your vLLM version if needed.
+"""
+
+import argparse
+import asyncio
+import contextlib
+import httpx
+import json
+import math
+import os
+import random
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple
+
+# ---------------------------
+# Utilities
+# ---------------------------
+
+def which(cmd: str) -> str:
+    path = shutil.which(cmd)
+    if not path:
+        raise RuntimeError(f"Required binary not found on PATH: {cmd}")
+    return path
+
+def count_visible_gpus() -> int:
+    # Honors CUDA_VISIBLE_DEVICES if set; otherwise queries nvidia-smi
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cvd:
+        if cvd.strip() == "":
+            return 0
+        return len([x for x in cvd.split(",") if x.strip() != ""])
+    # Fallback: nvidia-smi
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"], stderr=subprocess.DEVNULL
+        ).decode()
+        gpus = [ln.strip() for ln in out.splitlines() if ln.strip() != ""]
+        return len(gpus)
+    except Exception:
+        return 0
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+# ---------------------------
+# vLLM server lifecycle
+# ---------------------------
+
+class VLLMServer:
+    def __init__(self, args, trial_params: Dict[str, Any]):
+        self.args = args
+        self.trial_params = trial_params
+        self.proc: Optional[subprocess.Popen] = None
+        self.log_file = None
+
+    def build_cmd(self) -> Tuple[str, list]:
+        vllm = which("vllm")
+        cmd = [
+            vllm, "serve",
+            self.args.model,
+            "--host", self.args.host,
+            "--port", str(self.args.port),
+            "--dtype", self.args.dtype,
+            "--max-model-len", str(self.trial_params["max_model_len"]),
+            "--gpu-memory-utilization", f'{self.trial_params["gpu_mem_util"]:.3f}',
+            "--max-num-seqs", str(self.trial_params["max_num_seqs"]),
+            "--max-num-batched-tokens", str(self.trial_params["max_num_batched_tokens"]),
+            "--trust-remote-code",
+        ]
+
+        # Tensor parallel
+        if self.trial_params.get("tp_size", 1) > 1:
+            cmd += ["--tensor-parallel-size", str(self.trial_params["tp_size"])]
+
+        # Chunked prefill
+        if self.trial_params.get("enable_chunked_prefill", False):
+            cmd += ["--enable-chunked-prefill"]
+
+        # Speculative decoding (optional – requires a draft model). Disabled by default here.
+        # if self.trial_params.get("enable_spec_decoding", False):
+        #     cmd += ["--speculative-model", "<draft_model>", "--num-speculative-tokens", "64"]
+
+        # Extra args passthrough
+        if self.args.extra_serve_args:
+            cmd += self.args.extra_serve_args.split()
+
+        return self.args.workdir, cmd
+
+    def start(self):
+        workdir, cmd = self.build_cmd()
+        os.makedirs(workdir, exist_ok=True)
+        self.log_file = open(os.path.join(workdir, "vllm_trial.log"), "w")
+        self.proc = subprocess.Popen(
+            cmd,
+            cwd=workdir,
+            stdout=self.log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            preexec_fn=os.setsid if os.name != "nt" else None,
+        )
+
+    def is_running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def exit_code(self) -> Optional[int]:
+        return None if self.proc is None else self.proc.poll()
+
+    def stop(self):
+        if self.proc is None:
+            return
+        try:
+            if os.name != "nt":
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+            else:
+                self.proc.terminate()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except Exception:
+            try:
+                if os.name != "nt":
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+                else:
+                    self.proc.kill()
+            except Exception:
+                pass
+        if self.log_file:
+            self.log_file.close()
+        self.proc = None
+
+async def wait_for_ready(base_url: str, timeout_s: int = 60) -> bool:
+    deadline = time.time() + timeout_s
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        while time.time() < deadline:
+            try:
+                # vLLM OpenAI-compatible: /v1/models or /v1/health
+                r = await client.get(f"{base_url}/v1/models")
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+    return False
+
+# ---------------------------
+# Load generator & metrics
+# ---------------------------
+
+class LoadMetrics:
+    def __init__(self):
+        self.latencies_ms = []
+        self.completed = 0
+        self.failed = 0
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+
+    def record(self, ok: bool, latency_ms: float, usage: Optional[Dict[str, int]]):
+        if ok:
+            self.completed += 1
+            self.latencies_ms.append(latency_ms)
+            if usage:
+                self.total_prompt_tokens += usage.get("prompt_tokens", 0)
+                self.total_completion_tokens += usage.get("completion_tokens", 0)
+        else:
+            self.failed += 1
+
+    def summary(self, duration_s: float) -> Dict[str, Any]:
+        lat_p50 = statistics.median(self.latencies_ms) if self.latencies_ms else None
+        lat_p95 = None
+        if self.latencies_ms:
+            sorted_lats = sorted(self.latencies_ms)
+            idx = max(0, math.ceil(0.95 * len(sorted_lats)) - 1)
+            lat_p95 = sorted_lats[idx]
+        tps = self.total_completion_tokens / max(duration_s, 1e-6)
+        reqps = self.completed / max(duration_s, 1e-6)
+        return {
+            "requests_completed": self.completed,
+            "requests_failed": self.failed,
+            "req_per_sec": reqps,
+            "tokens_per_sec": tps,
+            "prompt_tokens_total": self.total_prompt_tokens,
+            "completion_tokens_total": self.total_completion_tokens,
+            "latency_p50_ms": lat_p50,
+            "latency_p95_ms": lat_p95,
+        }
+
+async def fire_one_request(client: httpx.AsyncClient, base_url: str, api_key: str,
+                           prompt: str, max_output_tokens: int, model_name: str) -> Tuple[bool, float, Optional[Dict[str, int]]]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model_name,  # vLLM ignores/fills from server model; keep placeholder string
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_output_tokens,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    t0 = now_ms()
+    try:
+        r = await client.post(f"{base_url}/v1/chat/completions", headers=headers, json=payload)
+        dt = now_ms() - t0
+        if r.status_code != 200:
+            return False, dt, None
+        data = r.json()
+        usage = data.get("usage") or {}
+        return True, dt, {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+        }
+    except Exception:
+        return False, float(now_ms() - t0), None
+
+async def run_load(base_url: str, api_key: str, duration_s: int, rps: float,
+                   prompt: str, max_output_tokens: int, concurrency: int, model_name: str) -> Dict[str, Any]:
+    metrics = LoadMetrics()
+    rate_interval = 1.0 / max(rps, 1e-6)
+    sem = asyncio.Semaphore(concurrency)
+    start_t = time.time()
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async def worker():
+            nonlocal metrics
+            async with sem:
+                ok, lat, usage = await fire_one_request(client, base_url, api_key, prompt, max_output_tokens, model_name)
+                metrics.record(ok, lat, usage)
+
+        # simple paced loop
+        next_fire = time.time()
+        while time.time() - start_t < duration_s:
+            asyncio.create_task(worker())
+            next_fire += rate_interval
+            await asyncio.sleep(max(0, next_fire - time.time()))
+
+        # drain: wait a small grace period for in-flight calls
+        await asyncio.sleep(2.0)
+
+    return metrics.summary(duration_s)
+
+# ---------------------------
+# Search space
+# ---------------------------
+
+def suggest_params(rng: random.Random, args, gpu_count: int) -> Dict[str, Any]:
+    # Ranges are conservative; widen as your hardware allows
+    # gpu_memory_utilization near 0.92–0.98 usually safe; 0.99 may OOM more often
+    gpu_mem_util = rng.uniform(0.90, 0.985)
+
+    # Max model len: pick among common budgets
+    max_model_len = rng.choice([8192, 12288, 16384, 24576, 32768])
+
+    # max-num-seqs: log-ish spread
+    max_num_seqs = int(round(2 ** rng.uniform(4, 10)))  # 16 .. ~1024
+
+    # max-num-batched-tokens: choose powers of two-ish
+    max_num_batched_tokens = int(round(2 ** rng.uniform(11, 16)))  # 2048 .. 65536
+
+    # tensor parallel (if user enables auto and we have >1 GPU)
+    if args.tensor_parallel_auto and gpu_count >= 2:
+        tp_size = rng.choice([1] + [i for i in range(2, gpu_count + 1)])
+    else:
+        tp_size = args.tensor_parallel_size
+
+    # chunked prefill toggle
+    enable_chunked_prefill = bool(rng.choice([True, False])) if args.enable_chunked_prefill else False
+
+    return {
+        "gpu_mem_util": gpu_mem_util,
+        "max_model_len": max_model_len,
+        "max_num_seqs": max_num_seqs,
+        "max_num_batched_tokens": max_num_batched_tokens,
+        "tp_size": tp_size,
+        "enable_chunked_prefill": enable_chunked_prefill,
+    }
+
+# ---------------------------
+# Objective runner
+# ---------------------------
+
+def format_trial_name(p: Dict[str, Any]) -> str:
+    return (
+        f"mmlen{p['max_model_len']}_"
+        f"gmu{p['gpu_mem_util']:.3f}_"
+        f"s{p['max_num_seqs']}_"
+        f"btok{p['max_num_batched_tokens']}_"
+        f"tp{p['tp_size']}_"
+        f"cpf{int(p['enable_chunked_prefill'])}"
+    )
+
+def save_best(best: Dict[str, Any], path: Path):
+    with open(path, "w") as f:
+        json.dump(best, f, indent=2)
+
+async def evaluate_trial(args, trial_params: Dict[str, Any], gpu_count: int) -> Tuple[float, Dict[str, Any]]:
+    """
+    Returns (score, info). Score is tokens/sec (higher is better). If crash/unhealthy, returns small penalty score.
+    """
+    server = VLLMServer(args, trial_params)
+    base_url = f"http://{args.host}:{args.port}"
+    api_key = args.api_key or "EMPTY"
+
+    try:
+        server.start()
+        # Ready?
+        ready = await wait_for_ready(base_url, timeout_s=args.ready_timeout_s)
+        if not ready:
+            # server failed to boot -> penalty
+            return -1.0, {"boot_failed": True}
+
+        # Warmup
+        if args.warmup_s > 0:
+            try:
+                await run_load(base_url, api_key, duration_s=args.warmup_s, rps=max(1, args.rps//2),
+                               prompt=args.prompt, max_output_tokens=args.max_output_tokens,
+                               concurrency=max(1, args.concurrency//2), model_name=args.model_name)
+            except Exception:
+                pass  # ignore warmup errors
+
+        # Main load
+        metrics = await run_load(base_url, api_key, duration_s=args.duration_s, rps=args.rps,
+                                 prompt=args.prompt, max_output_tokens=args.max_output_tokens,
+                                 concurrency=args.concurrency, model_name=args.model_name)
+
+        # If server died during load, treat as failure
+        if not server.is_running():
+            return -1.0, {"died_during_load": True, "metrics": metrics}
+
+        score = metrics["tokens_per_sec"]
+        return score, metrics
+
+    except Exception as e:
+        return -1.0, {"exception": repr(e)}
+    finally:
+        server.stop()
+
+# ---------------------------
+# Main search loop
+# ---------------------------
+
+def try_import_optuna():
+    try:
+        import optuna  # type: ignore
+        return optuna
+    except Exception:
+        return None
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True, help="Model path or HF repo for vLLM.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--dtype", default="auto")
+    parser.add_argument("--api_key", default=os.environ.get("OPENAI_API_KEY", "EMPTY"))
+    parser.add_argument("--model_name", default="tuned-model")
+    parser.add_argument("--workdir", default=str(Path(tempfile.gettempdir()) / "vllm_autotune"))
+    parser.add_argument("--prompt", default="Explain the significance of attention in transformers in ~150 words.")
+    parser.add_argument("--prompt_file", default=None, help="If set, overrides --prompt with file contents.")
+    parser.add_argument("--max_output_tokens", type=int, default=128)
+    parser.add_argument("--rps", type=float, default=20.0, help="Target requests per second for the loadgen.")
+    parser.add_argument("--concurrency", type=int, default=64, help="Max in-flight requests (semaphore).")
+    parser.add_argument("--duration_s", type=int, default=30, help="Duration per trial main measurement.")
+    parser.add_argument("--warmup_s", type=int, default=8, help="Warmup duration before measurement.")
+    parser.add_argument("--ready_timeout_s", type=int, default=90)
+    parser.add_argument("--trial_timeout_s", type=int, default=240, help="Hard cap per trial (boot+run).")
+    parser.add_argument("--max_trials", type=int, default=30)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--tensor_parallel_size", type=int, default=1)
+    parser.add_argument("--tensor_parallel_auto", action="store_true", help="Search tp in [1..#GPUs].")
+    parser.add_argument("--enable_chunked_prefill", action="store_true", help="Allow toggling chunked prefill in search.")
+    parser.add_argument("--extra_serve_args", default="", help="Extra args appended to `vllm serve`.")
+    parser.add_argument("--best_out", default="best_vllm_config.json")
+    args = parser.parse_args()
+
+    rng = random.Random(args.seed)
+    gpu_count = count_visible_gpus()
+
+    if args.prompt_file:
+        args.prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+
+    best_score = -1.0
+    best_cfg: Dict[str, Any] = {}
+    best_path = Path(args.best_out)
+
+    optuna = try_import_optuna()
+
+    async def one_trial(trial_idx: int, fixed_params: Optional[Dict[str, Any]] = None):
+        nonlocal best_score, best_cfg
+        params = suggest_params(rng, args, gpu_count)
+        if fixed_params:
+            params.update(fixed_params)
+        trial_name = format_trial_name(params)
+
+        # Per-trial time cap (kill if exceeds)
+        try:
+            score, info = await asyncio.wait_for(evaluate_trial(args, params, gpu_count), timeout=args.trial_timeout_s)
+        except asyncio.TimeoutError:
+            score, info = -1.0, {"timeout": True}
+
+        improved = score > best_score
+        result = {
+            "trial": trial_idx,
+            "trial_name": trial_name,
+            "score_tokens_per_sec": score,
+            "params": params,
+            "info": info,
+            "improved": improved,
+        }
+        print(json.dumps(result, indent=2))
+
+        if improved:
+            best_score = score
+            best_cfg = {
+                "score_tokens_per_sec": score,
+                "params": params,
+                "info": info,
+                "timestamp": int(time.time()),
+                "cmdline_hint": build_cmdline_hint(args, params),
+            }
+            save_best(best_cfg, best_path)
+
+    # If optuna present, use it; else random search
+    if optuna:
+        print("Using Optuna for search...")
+        study = optuna.create_study(direction="maximize")
+        def objective(trial):
+            # Map Optuna suggestions into our param dict and run synchronously via loop.run_until_complete
+            params = {
+                "gpu_mem_util": trial.suggest_float("gpu_mem_util", 0.90, 0.985),
+                "max_model_len": trial.suggest_categorical("max_model_len", [8192, 12288, 16384, 24576, 32768]),
+                "max_num_seqs": int(trial.suggest_int("max_num_seqs", 16, 1024, log=True)),
+                "max_num_batched_tokens": int(trial.suggest_int("max_num_batched_tokens", 2048, 65536, log=True)),
+                "tp_size": trial.suggest_int("tp_size", 1, max(1, gpu_count)) if args.tensor_parallel_auto and gpu_count >= 1 else args.tensor_parallel_size,
+                "enable_chunked_prefill": trial.suggest_categorical("enable_chunked_prefill", [False, True]) if args.enable_chunked_prefill else False,
+            }
+            loop = asyncio.get_event_loop()
+            try:
+                score, info = loop.run_until_complete(asyncio.wait_for(evaluate_trial(args, params, gpu_count), timeout=args.trial_timeout_s))
+            except asyncio.TimeoutError:
+                score, info = -1.0, {"timeout": True}
+            improved = score > best_score
+            if improved:
+                nonlocal best_score, best_cfg
+                best_score = score
+                best_cfg = {
+                    "score_tokens_per_sec": score,
+                    "params": params,
+                    "info": info,
+                    "timestamp": int(time.time()),
+                    "cmdline_hint": build_cmdline_hint(args, params),
+                }
+                save_best(best_cfg, Path(args.best_out))
+            # Report extra metrics to the logs
+            trial.set_user_attr("info", info)
+            return score
+
+        study.optimize(objective, n_trials=args.max_trials, gc_after_trial=True)
+        print("\n=== BEST (Optuna) ===")
+        print(json.dumps(best_cfg or {}, indent=2))
+    else:
+        print("Optuna not found. Falling back to random search.")
+        for i in range(1, args.max_trials + 1):
+            await one_trial(i)
+
+        print("\n=== BEST (Random) ===")
+        print(json.dumps(best_cfg or {}, indent=2))
+
+def build_cmdline_hint(args, p: Dict[str, Any]) -> str:
+    parts = [
+        "vllm serve",
+        args.model,
+        f"--host {args.host}",
+        f"--port {args.port}",
+        f"--dtype {args.dtype}",
+        f"--max-model-len {p['max_model_len']}",
+        f"--gpu-memory-utilization {p['gpu_mem_util']:.3f}",
+        f"--max-num-seqs {p['max_num_seqs']}",
+        f"--max-num-batched-tokens {p['max_num_batched_tokens']}",
+        "--trust-remote-code",
+    ]
+    if p.get("tp_size", 1) and p["tp_size"] > 1:
+        parts += [f"--tensor-parallel-size {p['tp_size']}"]
+    if p.get("enable_chunked_prefill", False):
+        parts += ["--enable-chunked-prefill"]
+    if args.extra_serve_args:
+        parts += [args.extra_serve_args]
+    return " ".join(parts)
+
+if __name__ == "__main__":
+    # Ensure clean shutdown on Ctrl+C
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(main())
