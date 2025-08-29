@@ -972,22 +972,3 @@
   "allowComments": true,
   "allowTrailingCommas": true
 }
-
-
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "vllm": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "vLLM (local)",
-      "options": {
-        "baseURL": "http://127.0.0.1:8000/v1"
-      },
-      "models": {
-        "local-llm": {
-          "name": "Local vLLM Model"
-        }
-      }
-    }
-  }
-}
