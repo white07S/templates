@@ -6,3 +6,6 @@ nohup etcd \
 
 localStorage:
   path: /home/remote/milvus_local_testing/milvus_cache
+
+
+nohup ./minio server /home/remote/milvus_local_testing/data/minio_data_folder --address :9000 --console-address :9001 > minio.log 2>&1 &
