@@ -1,21 +1,459 @@
-vllm serve Qwen/Qwen3-32B \
-  --tensor-parallel-size 2 \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --dtype bfloat16 \
-  --gpu-memory-utilization 0.9 \
-  --max-model-len 32768 \
-  --enable-chunked-prefill \
-  --enable-prefix-caching
+# Operational Risk Modeling Implementation Roadmap
+*From ECAP-Dependent to Multi-Source Probabilistic Framework*
 
+## Phase 1: Foundation & Quick Wins (Months 1-3)
 
+### 1.1 Data Infrastructure Setup
+**Objective**: Establish robust data pipeline for multi-source integration
 
-curl localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen/Qwen3-32B",
-    "messages":[
-      {"role":"system","content":"You are helpful."},
-      {"role":"user","content":"Tell me a joke."}
-    ]
-  }'
+**Key Activities**:
+- **Data Quality Assessment**: Audit all six data sources (internal loss, external loss, issues, controls, ECAP, KRI)
+  - Map data schemas and identify standardization needs
+  - Establish data quality metrics (completeness, accuracy, timeliness)
+  - Create data lineage documentation
+
+- **Data Warehouse Design**: 
+  - Implement star schema with central fact tables for losses, issues, controls
+  - Create dimension tables for taxonomy, divisions, time periods
+  - Establish ETL pipelines with automated quality checks
+
+**Deliverables**:
+- Consolidated operational risk database
+- Data quality dashboard
+- ETL automation scripts
+- Data governance framework
+
+**Resources**: 2 data engineers, 1 risk analyst
+**Success Metrics**: 95% data completeness, <24hr data refresh cycles
+
+### 1.2 SHAP Implementation for Existing Models
+**Objective**: Add explainability to current models without disrupting operations
+
+**Key Activities**:
+- **SHAP Integration**: Implement SHAP explainer for existing ECAP models
+  - Global feature importance analysis across all risk categories
+  - Local explanations for high-impact loss predictions
+  - Create SHAP summary plots and dependence plots
+
+- **Explainability Dashboard**:
+  - Build interactive visualization showing risk factor contributions
+  - Implement drill-down capabilities by taxonomy/division
+  - Create monthly explainability reports for senior management
+
+**Technical Implementation**:
+```python
+import shap
+import xgboost as xgb
+
+# Load existing model predictions
+model = load_existing_model()
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X_test)
+
+# Create dashboard visualizations
+shap.summary_plot(shap_values, X_test)
+shap.dependence_plot("KRI_Score", shap_values, X_test)
+```
+
+**Deliverables**:
+- SHAP-enhanced model explanations
+- Executive explainability dashboard
+- Model interpretation documentation
+
+**Resources**: 1 data scientist, 1 risk modeler
+**Success Metrics**: 100% prediction explainability, 80% stakeholder satisfaction
+
+## Phase 2: Bayesian Integration Framework (Months 4-8)
+
+### 2.1 Bayesian Credibility Model Development
+**Objective**: Implement mathematically rigorous multi-source weighting
+
+**Key Activities**:
+- **Credibility Weight Calculation**:
+  - Implement Bühlmann credibility: Z = n/(n + k) where k = E[s²]/Var[m]
+  - Calculate source-specific weights based on data volume and quality
+  - Dynamic weight adjustment based on recency and relevance
+
+- **Hierarchical Bayesian Model**:
+  - Level 1: Individual loss observations
+  - Level 2: Business line/taxonomy parameters  
+  - Level 3: External benchmark hyperparameters
+
+**Mathematical Framework**:
+```python
+import pymc as pm
+import numpy as np
+
+def bayesian_credibility_model():
+    with pm.Model() as model:
+        # Hyperpriors from external data
+        mu_external = pm.Normal('mu_external', mu=0, sigma=1)
+        sigma_external = pm.HalfNormal('sigma_external', sigma=1)
+        
+        # Business line parameters
+        mu_internal = pm.Normal('mu_internal', mu=mu_external, 
+                               sigma=sigma_external, shape=n_divisions)
+        
+        # Credibility weights
+        Z = calculate_credibility_weights(internal_volume, external_volume)
+        
+        # Combined estimates
+        mu_combined = Z * mu_internal + (1-Z) * mu_external
+        
+        return model
+```
+
+**Deliverables**:
+- Bayesian credibility model
+- Source weighting algorithm
+- Model validation framework
+
+**Resources**: 1 senior quantitative analyst, 1 Bayesian modeler
+**Success Metrics**: 25% reduction in prediction intervals, improved backtesting results
+
+### 2.2 KRI-Control Integration
+**Objective**: Transform qualitative assessments into quantitative risk adjustments
+
+**Key Activities**:
+- **Composite Scoring Algorithm**:
+  - Weight KRI thresholds by historical loss correlation
+  - Integrate control ratings (1-5 scale) with effectiveness studies
+  - Issue severity scoring with forward-looking adjustments
+
+- **Dynamic Risk Adjustment**:
+  - Real-time KRI monitoring with threshold alerts
+  - Control effectiveness tracking over time
+  - Issue escalation probability modeling
+
+**Implementation Framework**:
+```python
+def composite_risk_score(kri_values, control_ratings, issue_ratings):
+    # KRI standardization and weighting
+    kri_weighted = np.sum(kri_values * kri_weights)
+    
+    # Control effectiveness adjustment
+    control_factor = np.mean(control_ratings) / 5.0
+    
+    # Issue severity integration
+    issue_adjustment = calculate_issue_severity(issue_ratings)
+    
+    composite_score = (kri_weighted * control_factor) + issue_adjustment
+    return composite_score
+```
+
+**Deliverables**:
+- Composite risk scoring model
+- KRI-control integration algorithms
+- Forward-looking risk indicators
+
+**Resources**: 1 risk analyst, 1 control specialist
+**Success Metrics**: 30% improvement in early risk detection
+
+## Phase 3: Advanced ML Ensemble (Months 9-14)
+
+### 3.1 XGBoost Ensemble Implementation
+**Objective**: Deploy state-of-the-art ML with maintained explainability
+
+**Key Activities**:
+- **Multi-Model Ensemble**:
+  - XGBoost for primary predictions
+  - LightGBM for computational efficiency
+  - Random Forest for stability comparison
+  - Bayesian model averaging for uncertainty quantification
+
+- **Advanced Feature Engineering**:
+  - Lagged KRI features (3, 6, 12 months)
+  - Control environment trend indicators
+  - External loss pattern matching
+  - Seasonal/cyclical adjustments
+
+**Technical Architecture**:
+```python
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.ensemble import RandomForestRegressor
+import shap
+
+class OperationalRiskEnsemble:
+    def __init__(self):
+        self.models = {
+            'xgboost': xgb.XGBRegressor(n_estimators=1000, learning_rate=0.01),
+            'lightgbm': lgb.LGBMRegressor(n_estimators=1000, is_unbalance=True),
+            'random_forest': RandomForestRegressor(n_estimators=500)
+        }
+        self.meta_learner = None
+        
+    def fit(self, X, y):
+        # First level predictions
+        base_predictions = {}
+        for name, model in self.models.items():
+            model.fit(X, y)
+            base_predictions[name] = model.predict(X)
+        
+        # Meta-learner for ensemble combination
+        meta_features = np.column_stack(list(base_predictions.values()))
+        self.meta_learner = LinearRegression()
+        self.meta_learner.fit(meta_features, y)
+        
+    def predict_with_uncertainty(self, X):
+        predictions = []
+        for model in self.models.values():
+            predictions.append(model.predict(X))
+        
+        ensemble_pred = self.meta_learner.predict(np.column_stack(predictions))
+        uncertainty = np.std(predictions, axis=0)
+        
+        return ensemble_pred, uncertainty
+```
+
+**Deliverables**:
+- Production ML ensemble
+- Uncertainty quantification framework
+- SHAP-enhanced predictions
+
+**Resources**: 2 data scientists, 1 ML engineer
+**Success Metrics**: 20% improvement in prediction accuracy, maintained explainability
+
+### 3.2 Advanced Dependency Modeling
+**Objective**: Implement vine copulas for complex risk relationships
+
+**Key Activities**:
+- **Vine Copula Selection**:
+  - C-vine for hierarchical dependencies
+  - D-vine for sequential dependencies
+  - R-vine for maximum flexibility
+
+- **Dynamic Correlation Modeling**:
+  - Time-varying copula parameters
+  - Regime-switching models for crisis periods
+  - Stress scenario generation
+
+**Implementation Framework**:
+```python
+from pyvinecopulib import Vinecop, Bicop
+import scipy.stats as stats
+
+def build_vine_copula(loss_data):
+    # Transform to uniform margins
+    uniform_data = []
+    marginal_models = []
+    
+    for column in loss_data.columns:
+        # Fit marginal distribution
+        params = stats.lognorm.fit(loss_data[column])
+        marginal_models.append(('lognorm', params))
+        
+        # Transform to uniform
+        uniform_data.append(stats.lognorm.cdf(loss_data[column], *params))
+    
+    # Fit vine copula
+    vine = Vinecop(np.array(uniform_data).T)
+    
+    return vine, marginal_models
+
+def simulate_scenarios(vine, marginal_models, n_scenarios=10000):
+    # Generate uniform samples from vine
+    uniform_samples = vine.simulate(n_scenarios)
+    
+    # Transform back to original scales
+    scenarios = np.zeros_like(uniform_samples)
+    for i, (dist_name, params) in enumerate(marginal_models):
+        distribution = getattr(stats, dist_name)
+        scenarios[:, i] = distribution.ppf(uniform_samples[:, i], *params)
+    
+    return scenarios
+```
+
+**Deliverables**:
+- Vine copula models for risk dependencies
+- Scenario generation engine
+- Stress testing capabilities
+
+**Resources**: 1 quantitative analyst, 1 copula specialist
+**Success Metrics**: 15% better tail risk capture, improved stress test realism
+
+## Phase 4: Production & Optimization (Months 15-18)
+
+### 4.1 Model Validation & Governance
+**Objective**: Establish comprehensive validation framework
+
+**Key Activities**:
+- **Backtesting Suite**:
+  - Rolling window validation
+  - Out-of-sample testing
+  - Stress period performance analysis
+  - Benchmark comparison studies
+
+- **Model Risk Management**:
+  - Champion-challenger framework
+  - Sensitivity analysis automation
+  - Bias detection algorithms
+  - Drift monitoring systems
+
+**Validation Framework**:
+```python
+class ModelValidation:
+    def __init__(self, model, validation_data):
+        self.model = model
+        self.validation_data = validation_data
+        
+    def rolling_validation(self, window_size=252, step_size=63):
+        """Rolling window backtesting"""
+        results = []
+        for start in range(0, len(self.validation_data) - window_size, step_size):
+            train_end = start + window_size
+            test_start = train_end
+            test_end = min(test_start + step_size, len(self.validation_data))
+            
+            # Train and predict
+            train_data = self.validation_data.iloc[start:train_end]
+            test_data = self.validation_data.iloc[test_start:test_end]
+            
+            self.model.fit(train_data.drop('target', axis=1), train_data['target'])
+            predictions = self.model.predict(test_data.drop('target', axis=1))
+            
+            # Calculate metrics
+            metrics = self.calculate_metrics(test_data['target'], predictions)
+            results.append(metrics)
+            
+        return results
+    
+    def bias_detection(self, protected_attributes):
+        """Detect bias across different segments"""
+        bias_results = {}
+        for attr in protected_attributes:
+            groups = self.validation_data[attr].unique()
+            group_performance = {}
+            
+            for group in groups:
+                mask = self.validation_data[attr] == group
+                group_data = self.validation_data[mask]
+                
+                predictions = self.model.predict(group_data.drop(['target', attr], axis=1))
+                performance = self.calculate_metrics(group_data['target'], predictions)
+                group_performance[group] = performance
+            
+            bias_results[attr] = group_performance
+            
+        return bias_results
+```
+
+**Deliverables**:
+- Automated validation suite
+- Model governance framework
+- Regulatory compliance documentation
+
+**Resources**: 1 model validator, 1 governance specialist
+**Success Metrics**: 100% validation coverage, regulatory approval
+
+### 4.2 Real-Time Risk Monitoring
+**Objective**: Deploy live risk monitoring and alerting
+
+**Key Activities**:
+- **Real-Time Dashboard**:
+  - Live KRI monitoring with threshold alerts
+  - Dynamic risk scoring updates
+  - Predictive loss forecasting
+  - Executive summary views
+
+- **Automated Reporting**:
+  - Regulatory report generation
+  - Exception reporting for threshold breaches
+  - Trend analysis and early warnings
+  - Scenario stress testing results
+
+**Technical Architecture**:
+```python
+import streamlit as st
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+
+class RealTimeRiskDashboard:
+    def __init__(self, model_ensemble, data_pipeline):
+        self.models = model_ensemble
+        self.pipeline = data_pipeline
+        
+    def update_dashboard(self):
+        # Get latest data
+        current_data = self.pipeline.get_latest_data()
+        
+        # Generate predictions
+        predictions, uncertainty = self.models.predict_with_uncertainty(current_data)
+        
+        # Calculate risk scores
+        risk_scores = self.calculate_composite_scores(current_data)
+        
+        # Update visualizations
+        self.create_risk_heatmap(risk_scores)
+        self.create_prediction_intervals(predictions, uncertainty)
+        self.create_kri_monitoring(current_data)
+        
+    def create_alerting_system(self):
+        """Automated alert generation"""
+        alerts = []
+        
+        # KRI threshold breaches
+        kri_alerts = self.check_kri_thresholds()
+        alerts.extend(kri_alerts)
+        
+        # Prediction threshold breaches
+        pred_alerts = self.check_prediction_thresholds()
+        alerts.extend(pred_alerts)
+        
+        # Model drift detection
+        drift_alerts = self.check_model_drift()
+        alerts.extend(drift_alerts)
+        
+        return alerts
+```
+
+**Deliverables**:
+- Real-time risk monitoring system
+- Automated alerting framework
+- Executive dashboard
+
+**Resources**: 1 dashboard developer, 1 DevOps engineer
+**Success Metrics**: <5 minute data latency, 95% alert accuracy
+
+## Implementation Timeline & Resources
+
+### Resource Summary
+- **Total Team Size**: 8-12 FTEs across 18 months
+- **Key Roles**: 
+  - Project Manager (1)
+  - Data Engineers (2)
+  - Data Scientists (2-3)
+  - Quantitative Analysts (2)
+  - Risk Specialists (2)
+  - DevOps/Infrastructure (1)
+
+### Budget Estimates
+- **Technology Infrastructure**: $200K-400K
+- **External Consulting**: $150K-300K
+- **Training & Development**: $50K-100K
+- **Total Investment**: $400K-800K
+
+### Risk Mitigation
+- **Parallel Development**: Maintain current ECAP models during transition
+- **Phased Rollout**: Business line by business line implementation
+- **Champion-Challenger**: Compare new models against existing baselines
+- **Regulatory Engagement**: Early dialogue on advanced methods approval
+
+## Success Metrics & KPIs
+
+### Model Performance
+- **Prediction Accuracy**: 20-30% improvement in RMSE
+- **Bias Reduction**: 30-40% reduction in ECAP dependency
+- **Capital Efficiency**: 15-25% improvement in capital allocation
+
+### Operational Excellence
+- **Data Quality**: >95% completeness and accuracy
+- **Processing Speed**: <24 hour end-to-end refresh
+- **Explainability**: 100% prediction interpretability
+
+### Business Value
+- **Risk Detection**: 30% earlier identification of emerging risks
+- **False Positive Reduction**: 40% fewer unnecessary investigations
+- **Regulatory Confidence**: Successful model approval and validation
+
+This roadmap transforms your operational risk framework from ECAP-dependent to a sophisticated, multi-source probabilistic system that meets both current needs and future regulatory requirements while maintaining full explainability and business alignment.
