@@ -1,13 +1,1390 @@
-nohup etcd \
-  --data-dir=/home/remote/milvus_local_testing/data/etcd \
-  --listen-client-urls=http://127.0.0.1:2379 \
-  --advertise-client-urls=http://127.0.0.1:2379 > etcd.log 2>&1 &
+"""
+Milvus CRUD Utility for Issues Dataset
+Advanced implementation with multi-vector search, keyword matching, and error handling
+"""
+
+import hashlib
+import json
+import logging
+import traceback
+from typing import Dict, List, Optional, Any, Tuple, Union
+from dataclasses import dataclass, field
+from enum import Enum
+import numpy as np
+import pandas as pd
+from pymilvus import (
+    MilvusClient, 
+    Collection,
+    DataType,
+    FieldSchema,
+    CollectionSchema,
+    utility,
+    connections,
+    db
+)
+from pymilvus.exceptions import MilvusException
+import pyarrow.parquet as pq
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class SearchStrategy(Enum):
+    """Search strategies for different use cases"""
+    KEYWORD_ONLY = "keyword_only"
+    VECTOR_ONLY = "vector_only"
+    HYBRID = "hybrid"
+    WEIGHTED_HYBRID = "weighted_hybrid"
+
+@dataclass
+class SearchConfig:
+    """Configuration for search operations"""
+    top_k: int = 10
+    keyword_weight: float = 0.3
+    vector_weight: float = 0.7
+    rerank_strategy: str = "RRFRanker"  # or "WeightedRanker"
+    enable_text_match: bool = True
+    consistency_level: str = "Strong"
+    timeout: float = 30.0
+
+@dataclass
+class IngestionConfig:
+    """Configuration for data ingestion"""
+    batch_size: int = 1000
+    max_workers: int = 4
+    enable_duplicate_check: bool = True
+    upsert_mode: bool = False
+    retry_attempts: int = 3
+    retry_delay: float = 1.0
+
+class MilvusIssuesManager:
+    """
+    Advanced Milvus manager for issues dataset with CRUD operations,
+    multi-vector search, and sophisticated error handling.
+    """
+    
+    COLLECTION_NAME = "issues_dataset"
+    VECTOR_DIM = 4096
+    MAX_JSON_LENGTH = 65535
+    MAX_VARCHAR_LENGTH = 65535
+    
+    def __init__(
+        self,
+        uri: str = "http://localhost:19530",
+        token: str = "root:Milvus",
+        db_name: str = "default"
+    ):
+        """Initialize Milvus connection and configurations"""
+        self.uri = uri
+        self.token = token
+        self.db_name = db_name
+        self.client = None
+        self.collection = None
+        self._connect()
+        
+    def _connect(self):
+        """Establish connection to Milvus server"""
+        try:
+            self.client = MilvusClient(
+                uri=self.uri,
+                token=self.token,
+                db_name=self.db_name
+            )
+            logger.info(f"Connected to Milvus at {self.uri}")
+        except Exception as e:
+            logger.error(f"Failed to connect to Milvus: {e}")
+            raise
+    
+    def _generate_hash_id(self, raw_meta_data: Dict) -> str:
+        """Generate hash ID from raw_meta_data"""
+        json_str = json.dumps(raw_meta_data, sort_keys=True)
+        return hashlib.sha256(json_str.encode()).hexdigest()
+    
+    def create_collection(self, recreate: bool = False) -> bool:
+        """
+        Create collection with sophisticated schema supporting multiple vectors and JSON fields
+        """
+        try:
+            # Check if collection exists
+            if self.client.has_collection(self.COLLECTION_NAME):
+                if recreate:
+                    logger.info(f"Dropping existing collection: {self.COLLECTION_NAME}")
+                    self.client.drop_collection(self.COLLECTION_NAME)
+                else:
+                    logger.info(f"Collection {self.COLLECTION_NAME} already exists")
+                    return True
+            
+            # Create schema with multiple vector fields and JSON support
+            schema = MilvusClient.create_schema(
+                auto_id=False,
+                enable_dynamic_field=False
+            )
+            
+            # Primary key field
+            schema.add_field(
+                field_name="hash_id",
+                datatype=DataType.VARCHAR,
+                max_length=64,
+                is_primary=True,
+                description="Hash of raw_meta_data"
+            )
+            
+            # JSON fields for structured data
+            schema.add_field(
+                field_name="raw_meta_data",
+                datatype=DataType.JSON,
+                description="Raw metadata JSON"
+            )
+            
+            schema.add_field(
+                field_name="ai_taxonomy",
+                datatype=DataType.JSON,
+                description="AI taxonomy JSON"
+            )
+            
+            schema.add_field(
+                field_name="ai_root_cause",
+                datatype=DataType.JSON,
+                description="AI root cause JSON"
+            )
+            
+            schema.add_field(
+                field_name="ai_enrichment",
+                datatype=DataType.JSON,
+                description="AI enrichment JSON"
+            )
+            
+            schema.add_field(
+                field_name="all_actions",
+                datatype=DataType.JSON,
+                description="All actions JSON"
+            )
+            
+            # Single vector field for summary
+            schema.add_field(
+                field_name="summary_embeddings",
+                datatype=DataType.FLOAT_VECTOR,
+                dim=self.VECTOR_DIM,
+                description="Summary embeddings vector"
+            )
+            
+            # Array fields for multiple vectors (stored as JSON arrays)
+            schema.add_field(
+                field_name="issue_materialize_losses_embeddings",
+                datatype=DataType.JSON,
+                description="List of issue materialize losses embeddings"
+            )
+            
+            schema.add_field(
+                field_name="issues_failing_from_control_standpoint",
+                datatype=DataType.JSON,
+                description="List of control standpoint failure embeddings"
+            )
+            
+            # Additional fields for enhanced search
+            schema.add_field(
+                field_name="keyword_text",
+                datatype=DataType.VARCHAR,
+                max_length=self.MAX_VARCHAR_LENGTH,
+                enable_analyzer=True,
+                enable_match=True,
+                description="Concatenated searchable text"
+            )
+            
+            schema.add_field(
+                field_name="created_at",
+                datatype=DataType.INT64,
+                description="Creation timestamp"
+            )
+            
+            schema.add_field(
+                field_name="updated_at",
+                datatype=DataType.INT64,
+                description="Last update timestamp"
+            )
+            
+            # Create index parameters
+            index_params = self.client.prepare_index_params()
+            
+            # Vector index for summary embeddings
+            index_params.add_index(
+                field_name="summary_embeddings",
+                index_type="HNSW",
+                metric_type="L2",
+                params={"M": 16, "efConstruction": 256}
+            )
+            
+            # Inverted index for keyword search
+            index_params.add_index(
+                field_name="keyword_text",
+                index_type="INVERTED"
+            )
+            
+            # Create collection
+            self.client.create_collection(
+                collection_name=self.COLLECTION_NAME,
+                schema=schema,
+                index_params=index_params,
+                consistency_level="Strong"
+            )
+            
+            logger.info(f"Collection {self.COLLECTION_NAME} created successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create collection: {e}")
+            raise
+    
+    def _prepare_data_for_insertion(self, df: pd.DataFrame) -> List[Dict]:
+        """
+        Prepare dataframe for insertion into Milvus
+        """
+        prepared_data = []
+        
+        for _, row in df.iterrows():
+            try:
+                # Generate hash ID
+                hash_id = self._generate_hash_id(row['raw_meta_data'])
+                
+                # Prepare keyword text for text matching
+                keyword_text = self._extract_keywords(row)
+                
+                # Prepare record
+                record = {
+                    "hash_id": hash_id,
+                    "raw_meta_data": row['raw_meta_data'],
+                    "ai_taxonomy": row['ai_taxonomy'],
+                    "ai_root_cause": row['ai_root_cause'],
+                    "ai_enrichment": row['ai_enrichment'],
+                    "all_actions": row['all_actions'],
+                    "summary_embeddings": row['summary_embeddings'].tolist() if isinstance(row['summary_embeddings'], np.ndarray) else row['summary_embeddings'],
+                    "issue_materialize_losses_embeddings": [vec.tolist() if isinstance(vec, np.ndarray) else vec for vec in row['issue_matialize_losses_embeddings']],
+                    "issues_failing_from_control_standpoint": [vec.tolist() if isinstance(vec, np.ndarray) else vec for vec in row['issues_failing_from_control_standpoint']],
+                    "keyword_text": keyword_text,
+                    "created_at": int(time.time() * 1000),
+                    "updated_at": int(time.time() * 1000)
+                }
+                
+                prepared_data.append(record)
+                
+            except Exception as e:
+                logger.error(f"Error preparing record: {e}")
+                continue
+        
+        return prepared_data
+    
+    def _extract_keywords(self, row: pd.Series) -> str:
+        """Extract searchable keywords from JSON fields"""
+        keywords = []
+        
+        # Extract text from JSON fields
+        for field in ['raw_meta_data', 'ai_taxonomy', 'ai_root_cause', 'all_actions']:
+            if field in row and row[field]:
+                json_str = json.dumps(row[field]) if isinstance(row[field], dict) else str(row[field])
+                keywords.append(json_str)
+        
+        return " ".join(keywords)[:self.MAX_VARCHAR_LENGTH]
+    
+    def bulk_ingest(
+        self,
+        parquet_file: str,
+        config: Optional[IngestionConfig] = None
+    ) -> Dict[str, Any]:
+        """
+        Bulk ingest data from parquet file with advanced error handling
+        """
+        if config is None:
+            config = IngestionConfig()
+        
+        results = {
+            "total_records": 0,
+            "inserted": 0,
+            "updated": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "error_details": []
+        }
+        
+        try:
+            # Read parquet file
+            logger.info(f"Reading parquet file: {parquet_file}")
+            df = pd.read_parquet(parquet_file)
+            results["total_records"] = len(df)
+            
+            # Prepare data
+            prepared_data = self._prepare_data_for_insertion(df)
+            
+            if config.enable_duplicate_check:
+                # Check for existing records
+                existing_ids = self._check_existing_records([d["hash_id"] for d in prepared_data])
+                
+                if config.upsert_mode:
+                    # Upsert mode: update existing, insert new
+                    new_data = []
+                    update_data = []
+                    
+                    for record in prepared_data:
+                        if record["hash_id"] in existing_ids:
+                            update_data.append(record)
+                        else:
+                            new_data.append(record)
+                    
+                    # Insert new records
+                    if new_data:
+                        self._insert_batch(new_data, config)
+                        results["inserted"] = len(new_data)
+                    
+                    # Update existing records
+                    if update_data:
+                        for record in update_data:
+                            self.update(record["hash_id"], record)
+                        results["updated"] = len(update_data)
+                else:
+                    # Skip duplicates
+                    new_data = [d for d in prepared_data if d["hash_id"] not in existing_ids]
+                    results["duplicates"] = len(existing_ids)
+                    
+                    if new_data:
+                        self._insert_batch(new_data, config)
+                        results["inserted"] = len(new_data)
+            else:
+                # Insert without duplicate check
+                self._insert_batch(prepared_data, config)
+                results["inserted"] = len(prepared_data)
+            
+            logger.info(f"Ingestion completed: {results}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Bulk ingestion failed: {e}")
+            results["errors"] += 1
+            results["error_details"].append(str(e))
+            raise
+    
+    def _insert_batch(self, data: List[Dict], config: IngestionConfig):
+        """Insert data in batches with retry logic"""
+        for i in range(0, len(data), config.batch_size):
+            batch = data[i:i + config.batch_size]
+            
+            for attempt in range(config.retry_attempts):
+                try:
+                    self.client.insert(
+                        collection_name=self.COLLECTION_NAME,
+                        data=batch
+                    )
+                    logger.info(f"Inserted batch {i//config.batch_size + 1}, size: {len(batch)}")
+                    break
+                except Exception as e:
+                    if attempt < config.retry_attempts - 1:
+                        logger.warning(f"Insertion attempt {attempt + 1} failed, retrying...")
+                        time.sleep(config.retry_delay)
+                    else:
+                        logger.error(f"Failed to insert batch after {config.retry_attempts} attempts: {e}")
+                        raise
+    
+    def _check_existing_records(self, hash_ids: List[str]) -> set:
+        """Check which records already exist in the collection"""
+        existing_ids = set()
+        batch_size = 1000
+        
+        for i in range(0, len(hash_ids), batch_size):
+            batch_ids = hash_ids[i:i + batch_size]
+            filter_expr = f'hash_id in {batch_ids}'
+            
+            try:
+                results = self.client.query(
+                    collection_name=self.COLLECTION_NAME,
+                    filter=filter_expr,
+                    output_fields=["hash_id"]
+                )
+                existing_ids.update([r["hash_id"] for r in results])
+            except Exception as e:
+                logger.warning(f"Error checking existing records: {e}")
+        
+        return existing_ids
+    
+    def read(self, hash_id: str) -> Optional[Dict]:
+        """Read a single record by hash_id"""
+        try:
+            results = self.client.get(
+                collection_name=self.COLLECTION_NAME,
+                ids=[hash_id],
+                output_fields=["*"]
+            )
+            
+            if results:
+                return results[0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error reading record {hash_id}: {e}")
+            raise
+    
+    def update(self, hash_id: str, data: Dict) -> bool:
+        """Update a record by hash_id"""
+        try:
+            # Delete existing record
+            self.delete(hash_id)
+            
+            # Insert updated record
+            data["hash_id"] = hash_id
+            data["updated_at"] = int(time.time() * 1000)
+            
+            self.client.insert(
+                collection_name=self.COLLECTION_NAME,
+                data=[data]
+            )
+            
+            logger.info(f"Updated record: {hash_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating record {hash_id}: {e}")
+            raise
+    
+    def delete(self, hash_id: Union[str, List[str]]) -> bool:
+        """Delete record(s) by hash_id"""
+        try:
+            if isinstance(hash_id, str):
+                hash_ids = [hash_id]
+            else:
+                hash_ids = hash_id
+            
+            filter_expr = f'hash_id in {hash_ids}'
+            
+            self.client.delete(
+                collection_name=self.COLLECTION_NAME,
+                filter=filter_expr
+            )
+            
+            logger.info(f"Deleted {len(hash_ids)} record(s)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting record(s): {e}")
+            raise
+    
+    def advanced_search(
+        self,
+        keywords: Optional[List[str]] = None,
+        embeddings: Optional[List[np.ndarray]] = None,
+        config: Optional[SearchConfig] = None
+    ) -> List[Dict]:
+        """
+        Advanced search combining keyword and vector search with multiple strategies
+        """
+        if config is None:
+            config = SearchConfig()
+        
+        search_results = []
+        
+        try:
+            # Load collection if not loaded
+            self.client.load_collection(self.COLLECTION_NAME)
+            
+            if keywords and embeddings:
+                # Hybrid search
+                search_results = self._hybrid_search(keywords, embeddings, config)
+            elif keywords:
+                # Keyword-only search
+                search_results = self._keyword_search(keywords, config)
+            elif embeddings:
+                # Vector-only search
+                search_results = self._vector_search(embeddings, config)
+            else:
+                logger.warning("No search criteria provided")
+                return []
+            
+            return search_results
+            
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            raise
+    
+    def _keyword_search(self, keywords: List[str], config: SearchConfig) -> List[Dict]:
+        """Perform keyword-based search using TEXT_MATCH"""
+        try:
+            # Build filter expression for keyword matching
+            keyword_filters = []
+            for keyword in keywords:
+                keyword_filters.append(f'TEXT_MATCH(keyword_text, "{keyword}")')
+            
+            # Combine with OR logic (can be changed to AND if needed)
+            filter_expr = " or ".join(keyword_filters)
+            
+            # Query with keyword filter
+            results = self.client.query(
+                collection_name=self.COLLECTION_NAME,
+                filter=filter_expr,
+                output_fields=["hash_id", "raw_meta_data", "ai_taxonomy", "ai_root_cause", "ai_enrichment", "all_actions"],
+                limit=config.top_k
+            )
+            
+            # Calculate keyword match scores
+            for result in results:
+                score = self._calculate_keyword_score(result, keywords)
+                result["keyword_score"] = score
+            
+            # Sort by keyword score
+            results.sort(key=lambda x: x["keyword_score"], reverse=True)
+            
+            return results[:config.top_k]
+            
+        except Exception as e:
+            logger.error(f"Keyword search failed: {e}")
+            return []
+    
+    def _vector_search(self, embeddings: List[np.ndarray], config: SearchConfig) -> List[Dict]:
+        """Perform vector similarity search"""
+        try:
+            all_results = []
+            
+            # Search with summary embeddings
+            if len(embeddings) > 0:
+                results = self.client.search(
+                    collection_name=self.COLLECTION_NAME,
+                    data=[embeddings[0].tolist()],
+                    anns_field="summary_embeddings",
+                    limit=config.top_k,
+                    output_fields=["hash_id", "raw_meta_data", "ai_taxonomy", "ai_root_cause", "ai_enrichment", "all_actions"]
+                )
+                all_results.extend(results[0])
+            
+            # Additional searches for other embeddings can be added here
+            # For array embeddings, we'd need to implement custom logic
+            
+            return all_results
+            
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            return []
+    
+    def _hybrid_search(
+        self,
+        keywords: List[str],
+        embeddings: List[np.ndarray],
+        config: SearchConfig
+    ) -> List[Dict]:
+        """
+        Perform hybrid search combining keyword and vector search
+        """
+        try:
+            # Get keyword search results
+            keyword_results = self._keyword_search(keywords, config)
+            keyword_dict = {r["hash_id"]: r for r in keyword_results}
+            
+            # Get vector search results
+            vector_results = self._vector_search(embeddings, config)
+            vector_dict = {r["id"]: r for r in vector_results}
+            
+            # Combine and rerank results
+            combined_results = {}
+            
+            # Add keyword results
+            for hash_id, result in keyword_dict.items():
+                if hash_id not in combined_results:
+                    combined_results[hash_id] = {
+                        **result,
+                        "keyword_score": result.get("keyword_score", 0),
+                        "vector_score": 0,
+                        "final_score": 0
+                    }
+            
+            # Add vector results
+            for hash_id, result in vector_dict.items():
+                if hash_id in combined_results:
+                    combined_results[hash_id]["vector_score"] = 1.0 / (1.0 + result.get("distance", 1.0))
+                else:
+                    combined_results[hash_id] = {
+                        **result,
+                        "keyword_score": 0,
+                        "vector_score": 1.0 / (1.0 + result.get("distance", 1.0)),
+                        "final_score": 0
+                    }
+            
+            # Calculate final scores
+            for hash_id, result in combined_results.items():
+                if config.rerank_strategy == "WeightedRanker":
+                    result["final_score"] = (
+                        config.keyword_weight * result["keyword_score"] +
+                        config.vector_weight * result["vector_score"]
+                    )
+                else:  # RRFRanker
+                    # Reciprocal Rank Fusion
+                    k = 60  # RRF constant
+                    keyword_rank = self._get_rank(hash_id, keyword_dict)
+                    vector_rank = self._get_rank(hash_id, vector_dict)
+                    
+                    rrf_score = 0
+                    if keyword_rank > 0:
+                        rrf_score += 1.0 / (k + keyword_rank)
+                    if vector_rank > 0:
+                        rrf_score += 1.0 / (k + vector_rank)
+                    
+                    result["final_score"] = rrf_score
+            
+            # Sort by final score
+            final_results = sorted(
+                combined_results.values(),
+                key=lambda x: x["final_score"],
+                reverse=True
+            )
+            
+            return final_results[:config.top_k]
+            
+        except Exception as e:
+            logger.error(f"Hybrid search failed: {e}")
+            return []
+    
+    def _calculate_keyword_score(self, result: Dict, keywords: List[str]) -> float:
+        """Calculate keyword matching score"""
+        score = 0.0
+        text_fields = ["raw_meta_data", "ai_taxonomy", "ai_root_cause", "all_actions"]
+        
+        for field in text_fields:
+            if field in result and result[field]:
+                field_text = json.dumps(result[field]).lower() if isinstance(result[field], dict) else str(result[field]).lower()
+                for keyword in keywords:
+                    score += field_text.count(keyword.lower())
+        
+        return score
+    
+    def _get_rank(self, hash_id: str, results_dict: Dict) -> int:
+        """Get rank of a result in the results dictionary"""
+        if hash_id not in results_dict:
+            return -1
+        
+        sorted_ids = sorted(
+            results_dict.keys(),
+            key=lambda x: results_dict[x].get("keyword_score", 0) or (1.0 / (1.0 + results_dict[x].get("distance", 1.0))),
+            reverse=True
+        )
+        
+        return sorted_ids.index(hash_id) + 1 if hash_id in sorted_ids else -1
+    
+    def get_collection_stats(self) -> Dict:
+        """Get collection statistics"""
+        try:
+            stats = {
+                "collection_name": self.COLLECTION_NAME,
+                "entity_count": self.client.get_collection_stats(self.COLLECTION_NAME)["row_count"],
+                "loaded": self.client.get_load_state(self.COLLECTION_NAME)["state"],
+            }
+            return stats
+        except Exception as e:
+            logger.error(f"Failed to get collection stats: {e}")
+            raise
 
 
-localStorage:
-  path: /home/remote/milvus_local_testing/milvus_cache
+# Example usage and testing
+if __name__ == "__main__":
+    # Initialize manager
+    manager = MilvusIssuesManager()
+    
+    # Create collection
+    manager.create_collection(recreate=True)
+    
+    # Example: Ingest data from parquet
+    # config = IngestionConfig(
+    #     batch_size=500,
+    #     enable_duplicate_check=True,
+    #     upsert_mode=True
+    # )
+    # results = manager.bulk_ingest("issues_data.parquet", config)
+    # print(f"Ingestion results: {results}")
+    
+    # Example: Search
+    # search_config = SearchConfig(
+    #     top_k=20,
+    #     keyword_weight=0.4,
+    #     vector_weight=0.6,
+    #     rerank_strategy="RRFRanker"
+    # )
+    # 
+    # keywords = ["error", "system", "failure"]
+    # embeddings = [np.random.randn(4096)]  # Replace with actual embeddings
+    # 
+    # results = manager.advanced_search(
+    #     keywords=keywords,
+    #     embeddings=embeddings,
+    #     config=search_config
+    # )
+    # 
+    # for i, result in enumerate(results[:5]):
+    #     print(f"Result {i+1}: {result['hash_id']}, Score: {result.get('final_score', 0):.4f}")
+    
+    # Get stats
+    stats = manager.get_collection_stats()
+    print(f"Collection stats: {stats}")
+
+"""
+Advanced Search Utilities and Testing Framework for Milvus Issues Dataset
+Enhanced search algorithms, monitoring, and optimization utilities
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Optional, Tuple, Any, Callable
+from dataclasses import dataclass
+import json
+import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import logging
+from sklearn.metrics.pairwise import cosine_similarity
+from pymilvus import MilvusClient
+import hashlib
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class SearchMetrics:
+    """Metrics for search performance monitoring"""
+    query_time: float
+    recall_rate: float
+    precision_rate: float
+    f1_score: float
+    total_results: int
+    relevant_results: int
+
+class EnhancedSearchEngine:
+    """
+    Enhanced search engine with advanced algorithms and optimizations
+    """
+    
+    def __init__(self, milvus_manager):
+        self.manager = milvus_manager
+        self.search_cache = {}
+        self.cache_ttl = 300  # 5 minutes
+        
+    def multi_stage_search(
+        self,
+        keywords: List[str],
+        embeddings: List[np.ndarray],
+        stages: List[str] = ["coarse", "fine", "rerank"]
+    ) -> List[Dict]:
+        """
+        Multi-stage search pipeline for improved accuracy and performance
+        
+        Stages:
+        1. Coarse: Fast initial filtering
+        2. Fine: Detailed similarity matching
+        3. Rerank: Final scoring and ranking
+        """
+        results = []
+        
+        try:
+            # Stage 1: Coarse filtering
+            if "coarse" in stages:
+                coarse_results = self._coarse_search(keywords, embeddings)
+                candidate_ids = [r["hash_id"] for r in coarse_results[:100]]
+            else:
+                candidate_ids = None
+            
+            # Stage 2: Fine search
+            if "fine" in stages:
+                fine_results = self._fine_search(
+                    keywords, 
+                    embeddings, 
+                    candidate_ids
+                )
+            else:
+                fine_results = coarse_results
+            
+            # Stage 3: Reranking
+            if "rerank" in stages:
+                results = self._advanced_rerank(
+                    fine_results, 
+                    keywords, 
+                    embeddings
+                )
+            else:
+                results = fine_results
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Multi-stage search failed: {e}")
+            return []
+    
+    def _coarse_search(
+        self, 
+        keywords: List[str], 
+        embeddings: List[np.ndarray]
+    ) -> List[Dict]:
+        """Fast initial filtering using inverted indices"""
+        # Build keyword filter
+        keyword_filter = self._build_smart_keyword_filter(keywords)
+        
+        # Perform initial search with relaxed parameters
+        results = self.manager.client.search(
+            collection_name=self.manager.COLLECTION_NAME,
+            data=[embeddings[0].tolist()] if embeddings else [[0] * self.manager.VECTOR_DIM],
+            anns_field="summary_embeddings",
+            filter=keyword_filter if keyword_filter else None,
+            limit=100,
+            search_params={"metric_type": "L2", "params": {"nprobe": 10}}
+        )
+        
+        return results[0] if results else []
+    
+    def _fine_search(
+        self,
+        keywords: List[str],
+        embeddings: List[np.ndarray],
+        candidate_ids: Optional[List[str]] = None
+    ) -> List[Dict]:
+        """Detailed search within candidate set"""
+        filter_expr = None
+        
+        if candidate_ids:
+            # Batch candidate IDs for filter expression
+            filter_expr = f'hash_id in {candidate_ids[:1000]}'
+        
+        # Perform detailed search with higher precision
+        results = self.manager.client.search(
+            collection_name=self.manager.COLLECTION_NAME,
+            data=[embeddings[0].tolist()] if embeddings else [[0] * self.manager.VECTOR_DIM],
+            anns_field="summary_embeddings",
+            filter=filter_expr,
+            limit=50,
+            search_params={"metric_type": "L2", "params": {"nprobe": 50}},
+            output_fields=["hash_id", "raw_meta_data", "ai_taxonomy", "ai_root_cause", "ai_enrichment", "all_actions"]
+        )
+        
+        return results[0] if results else []
+    
+    def _advanced_rerank(
+        self,
+        results: List[Dict],
+        keywords: List[str],
+        embeddings: List[np.ndarray]
+    ) -> List[Dict]:
+        """
+        Advanced reranking with multiple signals:
+        - Semantic similarity
+        - Keyword relevance
+        - Field-specific boosting
+        - Temporal relevance
+        """
+        reranked = []
+        
+        for result in results:
+            score = 0.0
+            
+            # 1. Vector similarity score (normalized)
+            if "distance" in result:
+                vector_score = 1.0 / (1.0 + result["distance"])
+                score += vector_score * 0.4
+            
+            # 2. Keyword relevance with field boosting
+            keyword_scores = self._calculate_field_weighted_keyword_score(
+                result, 
+                keywords,
+                field_weights={
+                    "raw_meta_data": 1.0,
+                    "ai_taxonomy": 1.5,
+                    "ai_root_cause": 2.0,
+                    "all_actions": 1.2
+                }
+            )
+            score += keyword_scores * 0.4
+            
+            # 3. Completeness score (non-null fields)
+            completeness = self._calculate_completeness_score(result)
+            score += completeness * 0.1
+            
+            # 4. Recency score (if timestamp available)
+            if "updated_at" in result:
+                recency_score = self._calculate_recency_score(result["updated_at"])
+                score += recency_score * 0.1
+            
+            result["final_score"] = score
+            reranked.append(result)
+        
+        # Sort by final score
+        reranked.sort(key=lambda x: x["final_score"], reverse=True)
+        
+        return reranked
+    
+    def _build_smart_keyword_filter(self, keywords: List[str]) -> str:
+        """Build intelligent keyword filter with synonym expansion"""
+        filters = []
+        
+        for keyword in keywords:
+            # Add base keyword
+            base_filter = f'TEXT_MATCH(keyword_text, "{keyword}")'
+            
+            # Add common variations (can be extended with synonym dictionary)
+            variations = self._get_keyword_variations(keyword)
+            if variations:
+                variation_filters = [f'TEXT_MATCH(keyword_text, "{var}")' for var in variations]
+                combined = f'({base_filter} or {" or ".join(variation_filters)})'
+                filters.append(combined)
+            else:
+                filters.append(base_filter)
+        
+        return " and ".join(filters) if filters else ""
+    
+    def _get_keyword_variations(self, keyword: str) -> List[str]:
+        """Get keyword variations for query expansion"""
+        # Simple example - can be enhanced with proper NLP
+        variations = []
+        
+        # Common technical term variations
+        variation_map = {
+            "error": ["failure", "exception", "issue"],
+            "system": ["service", "application", "platform"],
+            "database": ["db", "datastore", "storage"],
+            "api": ["endpoint", "interface", "service"],
+            "performance": ["speed", "latency", "throughput"]
+        }
+        
+        keyword_lower = keyword.lower()
+        if keyword_lower in variation_map:
+            variations = variation_map[keyword_lower][:2]  # Limit variations
+        
+        return variations
+    
+    def _calculate_field_weighted_keyword_score(
+        self,
+        result: Dict,
+        keywords: List[str],
+        field_weights: Dict[str, float]
+    ) -> float:
+        """Calculate keyword score with field-specific weights"""
+        total_score = 0.0
+        
+        for field, weight in field_weights.items():
+            if field in result and result[field]:
+                field_text = json.dumps(result[field]).lower() if isinstance(result[field], dict) else str(result[field]).lower()
+                
+                field_score = 0
+                for keyword in keywords:
+                    # Count occurrences
+                    count = field_text.count(keyword.lower())
+                    # Apply TF-IDF-like scoring
+                    if count > 0:
+                        field_score += min(count, 5) * (1.0 / (1.0 + np.log(len(field_text))))
+                
+                total_score += field_score * weight
+        
+        # Normalize
+        return min(total_score / (len(keywords) * sum(field_weights.values())), 1.0)
+    
+    def _calculate_completeness_score(self, result: Dict) -> float:
+        """Calculate data completeness score"""
+        important_fields = ["raw_meta_data", "ai_taxonomy", "ai_root_cause", "ai_enrichment", "all_actions"]
+        
+        non_null_count = 0
+        for field in important_fields:
+            if field in result and result[field]:
+                if isinstance(result[field], dict) and len(result[field]) > 0:
+                    non_null_count += 1
+                elif isinstance(result[field], str) and len(result[field]) > 0:
+                    non_null_count += 1
+        
+        return non_null_count / len(important_fields)
+    
+    def _calculate_recency_score(self, timestamp: int) -> float:
+        """Calculate recency score based on timestamp"""
+        current_time = int(time.time() * 1000)
+        age_days = (current_time - timestamp) / (1000 * 86400)
+        
+        # Exponential decay with half-life of 30 days
+        return np.exp(-age_days / 30)
+    
+    def vector_search_with_multiple_embeddings(
+        self,
+        summary_embedding: np.ndarray,
+        issue_embeddings: List[np.ndarray],
+        control_embeddings: List[np.ndarray],
+        aggregation: str = "weighted_average"
+    ) -> List[Dict]:
+        """
+        Search using multiple embedding types with aggregation
+        """
+        all_results = {}
+        
+        # Search with summary embedding
+        summary_results = self.manager.client.search(
+            collection_name=self.manager.COLLECTION_NAME,
+            data=[summary_embedding.tolist()],
+            anns_field="summary_embeddings",
+            limit=50
+        )[0]
+        
+        # Store results with weights
+        for result in summary_results:
+            all_results[result["id"]] = {
+                "data": result,
+                "scores": {"summary": 1.0 / (1.0 + result["distance"])}
+            }
+        
+        # For array embeddings, we need custom implementation
+        # This is a placeholder for the complex multi-vector search
+        
+        # Aggregate scores
+        final_results = []
+        for item_id, item_data in all_results.items():
+            if aggregation == "weighted_average":
+                final_score = np.average(
+                    list(item_data["scores"].values()),
+                    weights=[0.5, 0.3, 0.2]  # Adjust weights as needed
+                )
+            elif aggregation == "max":
+                final_score = max(item_data["scores"].values())
+            else:  # sum
+                final_score = sum(item_data["scores"].values())
+            
+            item_data["data"]["final_score"] = final_score
+            final_results.append(item_data["data"])
+        
+        # Sort by final score
+        final_results.sort(key=lambda x: x["final_score"], reverse=True)
+        
+        return final_results
 
 
-nohup ./minio server /home/remote/milvus_local_testing/data/minio_data_folder --address :9000 --console-address :9001 > minio.log 2>&1 &
+class SearchOptimizer:
+    """
+    Optimizer for search parameters and performance tuning
+    """
+    
+    def __init__(self, milvus_manager):
+        self.manager = milvus_manager
+        self.performance_history = []
+    
+    def auto_tune_search_params(
+        self,
+        test_queries: List[Tuple[List[str], List[np.ndarray]]],
+        ground_truth: Optional[List[List[str]]] = None
+    ) -> Dict:
+        """
+        Automatically tune search parameters for optimal performance
+        """
+        best_params = {
+            "keyword_weight": 0.3,
+            "vector_weight": 0.7,
+            "top_k": 10,
+            "nprobe": 10
+        }
+        
+        best_score = 0
+        
+        # Grid search over parameter space
+        for kw_weight in [0.2, 0.3, 0.4, 0.5]:
+            for nprobe in [10, 20, 50]:
+                params = {
+                    "keyword_weight": kw_weight,
+                    "vector_weight": 1.0 - kw_weight,
+                    "top_k": 10,
+                    "nprobe": nprobe
+                }
+                
+                score = self._evaluate_params(test_queries, params, ground_truth)
+                
+                if score > best_score:
+                    best_score = score
+                    best_params = params
+        
+        logger.info(f"Best parameters found: {best_params}, Score: {best_score}")
+        return best_params
+    
+    def _evaluate_params(
+        self,
+        test_queries: List[Tuple[List[str], List[np.ndarray]]],
+        params: Dict,
+        ground_truth: Optional[List[List[str]]]
+    ) -> float:
+        """Evaluate search parameters"""
+        total_score = 0
+        
+        for i, (keywords, embeddings) in enumerate(test_queries):
+            # Perform search with given parameters
+            config = SearchConfig(
+                top_k=params["top_k"],
+                keyword_weight=params["keyword_weight"],
+                vector_weight=params["vector_weight"]
+            )
+            
+            results = self.manager.advanced_search(keywords, embeddings, config)
+            
+            # Calculate score
+            if ground_truth and i < len(ground_truth):
+                # Calculate precision/recall
+                retrieved_ids = [r["hash_id"] for r in results]
+                relevant_ids = ground_truth[i]
+                
+                if retrieved_ids and relevant_ids:
+                    intersection = set(retrieved_ids) & set(relevant_ids)
+                    precision = len(intersection) / len(retrieved_ids)
+                    recall = len(intersection) / len(relevant_ids)
+                    
+                    if precision + recall > 0:
+                        f1 = 2 * (precision * recall) / (precision + recall)
+                        total_score += f1
+            else:
+                # Use search latency as score (inverted)
+                start_time = time.time()
+                results = self.manager.advanced_search(keywords, embeddings, config)
+                latency = time.time() - start_time
+                total_score += 1.0 / (1.0 + latency)
+        
+        return total_score / len(test_queries)
+    
+    def analyze_search_performance(
+        self,
+        query_log: List[Dict]
+    ) -> Dict:
+        """
+        Analyze search performance from query logs
+        """
+        analysis = {
+            "total_queries": len(query_log),
+            "avg_latency": 0,
+            "avg_results": 0,
+            "keyword_usage": {},
+            "error_rate": 0,
+            "cache_hit_rate": 0
+        }
+        
+        total_latency = 0
+        total_results = 0
+        errors = 0
+        cache_hits = 0
+        
+        for query in query_log:
+            total_latency += query.get("latency", 0)
+            total_results += query.get("result_count", 0)
+            
+            if query.get("error"):
+                errors += 1
+            
+            if query.get("cache_hit"):
+                cache_hits += 1
+            
+            # Analyze keyword usage
+            for keyword in query.get("keywords", []):
+                analysis["keyword_usage"][keyword] = analysis["keyword_usage"].get(keyword, 0) + 1
+        
+        if len(query_log) > 0:
+            analysis["avg_latency"] = total_latency / len(query_log)
+            analysis["avg_results"] = total_results / len(query_log)
+            analysis["error_rate"] = errors / len(query_log)
+            analysis["cache_hit_rate"] = cache_hits / len(query_log)
+        
+        # Sort keywords by usage
+        analysis["keyword_usage"] = dict(
+            sorted(analysis["keyword_usage"].items(), key=lambda x: x[1], reverse=True)[:20]
+        )
+        
+        return analysis
 
-MILVUSCONF=/etc/milvus/configs /usr/bin/milvus run standalone
+
+class DataQualityChecker:
+    """
+    Utilities for checking and improving data quality
+    """
+    
+    def __init__(self, milvus_manager):
+        self.manager = milvus_manager
+    
+    def check_data_quality(self, sample_size: int = 100) -> Dict:
+        """
+        Check data quality metrics
+        """
+        # Sample records
+        results = self.manager.client.query(
+            collection_name=self.manager.COLLECTION_NAME,
+            filter="",
+            limit=sample_size,
+            output_fields=["*"]
+        )
+        
+        quality_report = {
+            "total_sampled": len(results),
+            "null_fields": {},
+            "empty_json_fields": {},
+            "vector_dimensions": {},
+            "duplicate_content": 0,
+            "data_completeness": 0
+        }
+        
+        # Check each record
+        for record in results:
+            # Check null fields
+            for field in ["raw_meta_data", "ai_taxonomy", "ai_root_cause", "ai_enrichment", "all_actions"]:
+                if field not in record or not record[field]:
+                    quality_report["null_fields"][field] = quality_report["null_fields"].get(field, 0) + 1
+                elif isinstance(record[field], dict) and len(record[field]) == 0:
+                    quality_report["empty_json_fields"][field] = quality_report["empty_json_fields"].get(field, 0) + 1
+            
+            # Check vector dimensions
+            if "summary_embeddings" in record:
+                dim = len(record["summary_embeddings"])
+                quality_report["vector_dimensions"][dim] = quality_report["vector_dimensions"].get(dim, 0) + 1
+        
+        # Calculate completeness
+        if len(results) > 0:
+            complete_records = len(results) - max(quality_report["null_fields"].values(), default=0)
+            quality_report["data_completeness"] = complete_records / len(results)
+        
+        return quality_report
+    
+    def find_duplicates(self, threshold: float = 0.95) -> List[Tuple[str, str, float]]:
+        """
+        Find potential duplicate records based on similarity
+        """
+        duplicates = []
+        
+        # Sample records
+        results = self.manager.client.query(
+            collection_name=self.manager.COLLECTION_NAME,
+            filter="",
+            limit=100,
+            output_fields=["hash_id", "summary_embeddings"]
+        )
+        
+        # Compare embeddings
+        for i in range(len(results)):
+            for j in range(i + 1, len(results)):
+                if "summary_embeddings" in results[i] and "summary_embeddings" in results[j]:
+                    similarity = cosine_similarity(
+                        [results[i]["summary_embeddings"]],
+                        [results[j]["summary_embeddings"]]
+                    )[0][0]
+                    
+                    if similarity > threshold:
+                        duplicates.append((
+                            results[i]["hash_id"],
+                            results[j]["hash_id"],
+                            similarity
+                        ))
+        
+        return duplicates
+
+
+# Testing utilities
+class TestFramework:
+    """
+    Testing framework for the Milvus issues system
+    """
+    
+    @staticmethod
+    def generate_test_data(num_records: int = 100) -> pd.DataFrame:
+        """Generate test data for testing"""
+        data = []
+        
+        for i in range(num_records):
+            record = {
+                "raw_meta_data": {
+                    "id": f"test_{i}",
+                    "title": f"Test Issue {i}",
+                    "description": f"Description for test issue {i}",
+                    "severity": np.random.choice(["low", "medium", "high", "critical"])
+                },
+                "ai_taxonomy": {
+                    "category": np.random.choice(["bug", "feature", "improvement", "documentation"]),
+                    "subcategory": f"subcat_{np.random.randint(1, 10)}"
+                },
+                "ai_root_cause": {
+                    "cause": f"Root cause {i}",
+                    "confidence": np.random.random()
+                },
+                "ai_enrichment": {
+                    "tags": [f"tag_{j}" for j in range(np.random.randint(1, 5))],
+                    "priority": np.random.randint(1, 10)
+                },
+                "all_actions": {
+                    "actions": [f"action_{j}" for j in range(np.random.randint(1, 3))],
+                    "status": np.random.choice(["pending", "in_progress", "completed"])
+                },
+                "summary_embeddings": np.random.randn(4096),
+                "issue_matialize_losses_embeddings": [np.random.randn(4096) for _ in range(2)],
+                "issues_failing_from_control_standpoint": [np.random.randn(4096) for _ in range(2)]
+            }
+            data.append(record)
+        
+        return pd.DataFrame(data)
+    
+    @staticmethod
+    def run_performance_test(manager, num_queries: int = 100):
+        """Run performance tests"""
+        results = {
+            "insert_time": [],
+            "search_time": [],
+            "update_time": [],
+            "delete_time": []
+        }
+        
+        # Generate test data
+        test_df = TestFramework.generate_test_data(10)
+        
+        # Test insertion
+        start = time.time()
+        prepared_data = manager._prepare_data_for_insertion(test_df)
+        manager._insert_batch(prepared_data, IngestionConfig())
+        results["insert_time"].append(time.time() - start)
+        
+        # Test search
+        for _ in range(num_queries):
+            keywords = ["test", "issue", "error"]
+            embedding = np.random.randn(4096)
+            
+            start = time.time()
+            search_results = manager.advanced_search(keywords, [embedding])
+            results["search_time"].append(time.time() - start)
+        
+        # Calculate statistics
+        stats = {}
+        for operation, times in results.items():
+            if times:
+                stats[operation] = {
+                    "mean": np.mean(times),
+                    "std": np.std(times),
+                    "min": np.min(times),
+                    "max": np.max(times),
+                    "p50": np.percentile(times, 50),
+                    "p95": np.percentile(times, 95)
+                }
+        
+        return stats
+
+
+# Example usage
+if __name__ == "__main__":
+    from milvus_issues_crud import MilvusIssuesManager, SearchConfig, IngestionConfig
+    
+    # Initialize manager
+    manager = MilvusIssuesManager()
+    
+    # Initialize enhanced search engine
+    search_engine = EnhancedSearchEngine(manager)
+    
+    # Initialize optimizer
+    optimizer = SearchOptimizer(manager)
+    
+    # Initialize quality checker
+    quality_checker = DataQualityChecker(manager)
+    
+    # Example: Multi-stage search
+    keywords = ["error", "system", "database"]
+    embeddings = [np.random.randn(4096)]
+    
+    results = search_engine.multi_stage_search(keywords, embeddings)
+    print(f"Multi-stage search returned {len(results)} results")
+    
+    # Example: Check data quality
+    quality_report = quality_checker.check_data_quality()
+    print(f"Data quality report: {quality_report}")
+    
+    # Example: Run performance test
+    perf_stats = TestFramework.run_performance_test(manager, num_queries=10)
+    print(f"Performance statistics: {perf_stats}")
