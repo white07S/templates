@@ -1558,31 +1558,44 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 
-
 def get_collection_stats(self) -> Dict:
     try:
-        stats = {
-            "collection_name": self.COLLECTION_NAME,
-            "entity_count": self.client.get_collection_stats(self.COLLECTION_NAME).get("row_count", 0),
-            "load_state": self.client.get_load_state(self.COLLECTION_NAME).get("state", "Unknown"),
-            "indexes": []
-        }
+        # 1) Prove we’re in the expected DB and the collection is really there
+        current_db = getattr(self.client, "db_name", None)
+        coll_list = self.client.list_collections()
+        if self.COLLECTION_NAME not in coll_list:
+            raise RuntimeError(
+                f"Collection '{self.COLLECTION_NAME}' not found. "
+                f"DB='{current_db}', collections={coll_list}"
+            )
 
-        # ✅ Replace describe_collection with list/describe index calls
+        # 2) Now it’s safe to call stats APIs (these internally describe the collection)
+        row_info = self.client.get_collection_stats(self.COLLECTION_NAME)
+        load_info = self.client.get_load_state(self.COLLECTION_NAME)
+
+        # 3) Index details (no describe_collection)
+        indexes = []
         try:
             idx_names = self.client.list_indexes(self.COLLECTION_NAME) or []
-            details = []
             for name in idx_names:
                 try:
-                    details.append(self.client.describe_index(self.COLLECTION_NAME, name))
+                    indexes.append(self.client.describe_index(self.COLLECTION_NAME, name))
                 except Exception:
-                    # Some deployments may not support describe_index; keep it best-effort
-                    details.append({"index_name": name})
-            stats["indexes"] = details
-        except Exception:
-            pass
+                    indexes.append({"index_name": name})
+        except Exception as warn:
+            logger.warning(f"Could not list/describe indexes: {warn}")
 
-        return stats
+        return {
+            "collection_name": self.COLLECTION_NAME,
+            "db_name": current_db,
+            "entity_count": row_info.get("row_count", 0),
+            "load_state": load_info.get("state", "Unknown"),
+            "indexes": indexes,
+            "collections_seen": coll_list,
+        }
     except Exception as e:
         logger.error(f"Failed to get collection stats: {e}")
         raise
+
+logger.info(f"in DB='{manager.client.db_name}', collections: {manager.client.list_collections()}")
+assert manager.COLLECTION_NAME in manager.client.list_collections(), "Collection creation failed"
