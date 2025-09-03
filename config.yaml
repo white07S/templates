@@ -1556,3 +1556,33 @@ def main():
 if __name__ == "__main__":
     success = main()
     exit(0 if success else 1)
+
+
+
+def get_collection_stats(self) -> Dict:
+    try:
+        stats = {
+            "collection_name": self.COLLECTION_NAME,
+            "entity_count": self.client.get_collection_stats(self.COLLECTION_NAME).get("row_count", 0),
+            "load_state": self.client.get_load_state(self.COLLECTION_NAME).get("state", "Unknown"),
+            "indexes": []
+        }
+
+        # ✅ Replace describe_collection with list/describe index calls
+        try:
+            idx_names = self.client.list_indexes(self.COLLECTION_NAME) or []
+            details = []
+            for name in idx_names:
+                try:
+                    details.append(self.client.describe_index(self.COLLECTION_NAME, name))
+                except Exception:
+                    # Some deployments may not support describe_index; keep it best-effort
+                    details.append({"index_name": name})
+            stats["indexes"] = details
+        except Exception:
+            pass
+
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get collection stats: {e}")
+        raise
