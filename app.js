@@ -6,7 +6,7 @@ When you install Milvus Standalone from the .deb package, it expects a few syste
 Here’s a checklist of prerequisites you should have before installing the Milvus .deb package:
 
 ⸻
-
+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
 ✅ System Dependencies
 
 Install these before running the .deb:
