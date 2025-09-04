@@ -340,16 +340,28 @@ class TantivyParquetSearchManager:
         # Build optimized query
         query = self._build_optimized_query(optimized_keywords, fuzzy, phrase, boost_exact)
         
-        # Execute search
-        search_results = self.searcher.search(query, top_k)
+        # Execute search - fetch more than needed to handle duplicates
+        search_results = self.searcher.search(query, top_k * 3)
         
-        # Format results with additional metadata
+        # Format results with additional metadata and deduplication
         results = []
+        seen_hashes = set()
+        
         for score, doc_address in search_results.hits:
+            if len(results) >= top_k:
+                break
+                
             doc = self.searcher.doc(doc_address)
+            doc_hash = doc.get_first("hash")
+            
+            # Skip if we've already seen this document (deduplication)
+            if doc_hash in seen_hashes:
+                continue
+            
+            seen_hashes.add(doc_hash)
             
             result = SearchResult(
-                hash=doc.get_first("hash"),
+                hash=doc_hash,
                 score=score,
                 matched_terms=optimized_keywords,
                 data=doc.get_first("json_data")
