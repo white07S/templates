@@ -50,9 +50,8 @@ class TantivyParquetSearchManager:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
         self.schema = None
-        self.index = None
+        self._index = None
         self.searcher = None
-        self.query_parser = None
         
         # Optimization flags
         self.enable_optimizations = enable_optimizations
@@ -210,14 +209,14 @@ class TantivyParquetSearchManager:
             "docstore_blocksize": 16384   # Larger blocks for sequential reads
         }
         
-        self.index = tantivy.Index(
+        self._index = tantivy.Index(
             self.schema,
             path=str(self.index_dir),
             reuse=True
         )
         
         # Configure writer with large heap for better performance
-        writer = self.index.writer(
+        writer = self._index.writer(
             heap_size=1024_000_000,  # 1GB heap
             num_threads=num_threads
         )
@@ -265,10 +264,6 @@ class TantivyParquetSearchManager:
         writer.commit()
         writer.wait_merging_threads()
         
-        if optimize_for_speed:
-            # Force segment merging for faster searches
-            writer.commit()  # Merge segments
-        
         # Store term statistics for query optimization
         self._term_stats = {
             'total_terms': len(term_freq),
@@ -277,20 +272,14 @@ class TantivyParquetSearchManager:
         self._save_term_stats()
         
         # Reload searcher
-        self.index.reload()
-        self.searcher = self.index.searcher()
+        self._index.reload()
+        self.searcher = self._index.searcher()
         
-        # Initialize query parser with both fields
+        # Store which fields to search
         if optimize_for_speed:
-            self.query_parser = tantivy.QueryParser.for_index(
-                self.index,
-                ["content", "content_exact"]
-            )
+            self.search_fields = ["content", "content_exact"]
         else:
-            self.query_parser = tantivy.QueryParser.for_index(
-                self.index,
-                ["content"]
-            )
+            self.search_fields = ["content"]
         
         # Clear pending documents
         self._pending_documents = None
@@ -332,8 +321,8 @@ class TantivyParquetSearchManager:
             List of SearchResult objects
         """
         if not self.searcher:
-            self.searcher = self.index.searcher()
-            self.query_parser = tantivy.QueryParser.for_index(self.index, ["content"])
+            self.searcher = self._index.searcher()
+            self.search_fields = ["content"]
         
         # Generate cache key
         cache_key = self._get_cache_key(keywords, top_k, fuzzy, phrase)
@@ -360,10 +349,10 @@ class TantivyParquetSearchManager:
             doc = self.searcher.doc(doc_address)
             
             result = SearchResult(
-                hash=doc.get_first("hash").text,
+                hash=doc.get_first("hash"),
                 score=score,
                 matched_terms=optimized_keywords,
-                data=doc.get_first("json_data").value
+                data=doc.get_first("json_data")
             )
             
             # Add highlight snippets if available
@@ -446,7 +435,7 @@ class TantivyParquetSearchManager:
             exact_query = f'content_exact:"{" ".join(keywords)}"^2'
             query_str = f"({query_str}) OR ({exact_query})"
         
-        query = self.query_parser.parse_query(query_str)
+        query = self._index.parse_query(query_str, self.search_fields)
         
         # Cache compiled query
         if len(self._query_cache) < 1000:
@@ -517,17 +506,17 @@ class TantivyParquetSearchManager:
     
     def optimize_index(self):
         """Run index optimization for maximum search performance"""
-        if not self.index:
+        if not self._index:
             raise ValueError("No index to optimize")
         
         print("Optimizing index...")
-        writer = self.index.writer()
+        writer = self._index.writer()
         writer.commit()  # Trigger segment merging
         writer.wait_merging_threads()
         
         # Reload searcher with optimized index
-        self.index.reload()
-        self.searcher = self.index.searcher()
+        self._index.reload()
+        self.searcher = self._index.searcher()
         print("Index optimized")
 
 
@@ -592,7 +581,7 @@ if __name__ == "__main__":
     
     # Step 1: Ingest data from Parquet
     print("Step 1: Ingesting data...")
-    ingest_stats = manager.ingest("your_data.parquet", batch_size=1000)
+    ingest_stats = manager.ingest("test_data.parquet", batch_size=1000)
     print(f"Ingested: {ingest_stats}")
     
     # Step 2: Build index
