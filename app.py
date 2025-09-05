@@ -16,16 +16,9 @@ from qdrant_client.http.models import (
     FieldCondition,
     Filter,
     MatchAny,
-    MatchValue,
-    OptimizersConfigDiff,
-    PayloadSchemaType,
-    PointStruct,
-    ScrollRequest,
     SearchParams,
     SearchRequest,
     VectorParams,
-    WithPayloadSelector,
-    PayloadIncludeSelector,
 )
 
 # --------- CONFIG ---------
@@ -33,16 +26,17 @@ DIM = 4096
 MAX_FEATURES = 5
 FEATURE_COLS = [f"Feature {i}" for i in range(1, MAX_FEATURES + 1)]
 HASH_COL = "Hash"
-# Choose 'euclid' for L2 indexing speed; we'll compute exact L1/L2 in final re-rank anyway
+
+# Choose 'euclid' (L2) for fast ANN; final exact rerank supports L1 or L2
 QDRANT_DISTANCE = Distance.EUCLID
 
-# Per-feature collections namespace
+# Per-feature collection name prefix
 COLL_PREFIX = "mfset_f"   # -> mfset_f1 ... mfset_f5
 
-# ANN search knobs (tune to your data size)
+# HNSW / ANN knobs (tune to your dataset size)
 HNSW_M = 32                 # graph degree
 HNSW_EF_CONSTRUCTION = 128  # build-time
-HNSW_EF_SEARCH = 128        # query-time (you can raise to 256/512 for more recall)
+HNSW_EF_SEARCH = 128        # query-time (raise to 256/512 for more recall)
 
 # Candidate sizes
 CANDIDATES_PER_LIST = 80    # K': per (feature, query vector)
@@ -51,13 +45,23 @@ FUSE_POOL_LIMIT = 400       # cap union size before exact re-rank
 # RRF fusion
 RRF_K = 60
 
+
 # --------- UTILITIES ---------
+def collection_exists(client: QdrantClient, name: str) -> bool:
+    try:
+        client.get_collection(name)
+        return True
+    except Exception:
+        return False
+
+
 def stable_point_id(hash_str: str, feature_idx: int, sub_idx: int) -> int:
-    """Create a deterministic 63-bit positive integer ID for Qdrant."""
+    """Deterministic 63-bit positive integer ID for Qdrant."""
     key = f"{hash_str}|{feature_idx}|{sub_idx}".encode("utf-8")
     h = hashlib.blake2b(key, digest_size=8).digest()
     val = int.from_bytes(h, "big") & ((1 << 63) - 1)
     return val
+
 
 def to_list_of_vectors(value) -> List[np.ndarray]:
     """
@@ -66,7 +70,7 @@ def to_list_of_vectors(value) -> List[np.ndarray]:
       - np.ndarray of shape (4096,)
       - list/tuple of np.ndarray/list (each 4096,)
       - list/tuple of floats of len 4096
-      - strings that can be eval'ed to above (last resort)
+      - strings that can be parsed into above (last resort)
     """
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return []
@@ -84,28 +88,28 @@ def to_list_of_vectors(value) -> List[np.ndarray]:
             raise ValueError(f"Unexpected ndarray shape {value.shape}")
 
     if isinstance(value, (list, tuple)):
-        # Could be a single vector as list-of-floats or list of vectors
         if len(value) == DIM and all(isinstance(t, (float, int, np.floating)) for t in value):
             return [as_vec(value)]
-        # else: assume list of vectors
         out = [as_vec(v) for v in value]
         if len(out) > 5:
             raise ValueError("Feature list cannot exceed 5 vectors")
         return out
 
     if isinstance(value, str):
-        # Last-resort parse
         import ast
         parsed = ast.literal_eval(value)
         return to_list_of_vectors(parsed)
 
     raise ValueError(f"Unsupported cell type for vector(s): {type(value)}")
 
+
 def l2(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.linalg.norm(a - b))
 
+
 def l1(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.abs(a - b).sum())
+
 
 # --------- CORE CLASS ---------
 class MultiFeatureQdrant:
@@ -115,8 +119,9 @@ class MultiFeatureQdrant:
         { "hash": str, "feature": int, "sub_idx": int }
     """
 
-    def __init__(self, host: str = "localhost", port: int = 6333, api_key: Optional[str] = None):
-        self.client = QdrantClient(host=host, port=port, api_key=api_key)
+    def __init__(self, host: str = "localhost", port: int = 6333):
+        # Local Qdrant; no API key needed
+        self.client = QdrantClient(host=host, port=port)
 
     # ---- Collections ----
     def collection_name(self, feature_idx: int) -> str:
@@ -129,33 +134,20 @@ class MultiFeatureQdrant:
         """
         for j in range(1, MAX_FEATURES + 1):
             name = self.collection_name(j)
-            if recreate and self.client.exists(name):
-                self.client.delete_collection(name)
 
-            if not self.client.exists(name):
+            if recreate and collection_exists(self.client, name):
+                try:
+                    self.client.delete_collection(name)
+                except Exception:
+                    pass  # ignore if not present
+
+            # create if missing
+            if not collection_exists(self.client, name):
                 self.client.recreate_collection(
                     collection_name=name,
-                    vectors_config=VectorParams(
-                        size=DIM, distance=QDRANT_DISTANCE, on_disk=False  # keep in RAM for speed
-                    ),
+                    vectors_config=VectorParams(size=DIM, distance=QDRANT_DISTANCE),
                     hnsw_config={"m": HNSW_M, "ef_construct": HNSW_EF_CONSTRUCTION},
-                    optimizers_config=OptimizersConfigDiff(
-                        indexing_threshold=20000,  # build HNSW early
-                        memmap_threshold=0,        # keep segments in RAM
-                    ),
-                    # You can also define payload schema for speed/validation
-                    # (optional but nice hygiene)
-                    payload_schema={
-                        "hash": PayloadSchemaType.keyword,
-                        "feature": PayloadSchemaType.integer,
-                        "sub_idx": PayloadSchemaType.integer,
-                    },
                 )
-            # Set default query-time ef (you can also pass per-search)
-            self.client.set_collection_params(
-                name,
-                params={"hnsw_config": {"ef_construct": HNSW_EF_CONSTRUCTION}, "optimizer_config": {}},
-            )
 
     # ---- Ingestion ----
     def upsert_dataframe(self, df: pd.DataFrame, batch: int = 2048, dedupe: bool = True):
@@ -176,27 +168,25 @@ class MultiFeatureQdrant:
         # Build and send per-feature batches
         for feature_idx, feature_col in enumerate(FEATURE_COLS, start=1):
             name = self.collection_name(feature_idx)
-            points: List[PointStruct] = []
+            points = []
 
             for _, row in df.iterrows():
                 h = str(row[HASH_COL])
                 try:
                     vecs = to_list_of_vectors(row[feature_col])
                 except Exception:
-                    # If a feature is missing/empty, skip
                     vecs = []
-                # Enforce limit
                 if len(vecs) > 5:
                     raise ValueError("Feature list cannot exceed 5 vectors")
 
                 for sub_idx, v in enumerate(vecs):
                     pid = stable_point_id(h, feature_idx, sub_idx)
                     points.append(
-                        PointStruct(
-                            id=pid,
-                            vector=v.astype(np.float32).tolist(),
-                            payload={"hash": h, "feature": feature_idx, "sub_idx": sub_idx},
-                        )
+                        {
+                            "id": pid,
+                            "vector": v.astype(np.float32).tolist(),
+                            "payload": {"hash": h, "feature": feature_idx, "sub_idx": sub_idx},
+                        }
                     )
 
                 if len(points) >= batch:
@@ -212,19 +202,17 @@ class MultiFeatureQdrant:
         """
         if not hashes:
             return
+        flt = Filter(must=[FieldCondition(key="hash", match=MatchAny(any=hashes))])
         for j in range(1, MAX_FEATURES + 1):
             name = self.collection_name(j)
-            if not self.client.exists(name):
+            if not collection_exists(self.client, name):
                 continue
-            flt = Filter(
-                must=[FieldCondition(key="hash", match=MatchAny(any=hashes))]
-            )
             self.client.delete(name, points_selector=flt)
 
     # ---- Search ----
     def search(
         self,
-        query: Dict[int, Iterable[np.ndarray]],   # {feature_idx: list of vectors} (vectors can be 1 or many)
+        query: Dict[int, Iterable[np.ndarray]],   # {feature_idx: list of vectors}
         top_k: int = 5,
         per_list_k: int = CANDIDATES_PER_LIST,
         prefer_common: bool = True,
@@ -237,8 +225,7 @@ class MultiFeatureQdrant:
         - Stage 2: RRF + coverage fusion across lists to form a candidate pool
         - Stage 3: Exact re-rank (L1/L2) on candidate pool using all sub-vectors per feature
         """
-
-        # Normalize query to {feature_idx: [np.ndarray, ...]}
+        # Normalize query
         qnorm: Dict[int, List[np.ndarray]] = {}
         for feat, qv in query.items():
             if not (1 <= feat <= MAX_FEATURES):
@@ -249,14 +236,14 @@ class MultiFeatureQdrant:
                     raise ValueError(f"Query vector must be 1D of length {DIM}, got {v.shape}")
 
         # ---- Stage 1: Batch ANN per (feature, qvec)
-        lists_by_feat_and_q = {}  # key=(feat, qidx) -> list[(hash, distance, rank)]
+        lists_by_feat_and_q = {}  # (feat, qidx) -> list[(hash, distance, rank)]
         for feat, qvecs in qnorm.items():
             name = self.collection_name(feat)
             reqs = [
                 SearchRequest(
                     vector=qv.tolist(),
                     limit=per_list_k,
-                    with_payload=WithPayloadSelector(include=PayloadIncludeSelector(fields=["hash", "sub_idx"])),
+                    with_payload=["hash", "sub_idx"],
                     params=SearchParams(hnsw_ef=hnsw_ef, exact=False),
                 )
                 for qv in qvecs
@@ -266,37 +253,31 @@ class MultiFeatureQdrant:
                 # de-dup by hash within this (feat,qidx)
                 best: Dict[str, float] = {}
                 for r in res:
-                    h = r.payload["hash"]
-                    # Qdrant returns lower score for euclid (distance). Keep min distance per hash.
-                    d = float(r.score)
+                    h = r.payload.get("hash")
+                    d = float(r.score)  # euclid distance; lower is better
+                    if h is None:
+                        continue
                     if (h not in best) or (d < best[h]):
                         best[h] = d
                 ranked = sorted(best.items(), key=lambda x: x[1])  # asc by distance
                 lists_by_feat_and_q[(feat, qidx)] = [(h, dist, rank + 1) for rank, (h, dist) in enumerate(ranked)]
 
         # ---- Stage 2: RRF + coverage fusion
-        fused, candidate_hashes = self._rrf_fuse(lists_by_feat_and_q, prefer_common=prefer_common)
-
-        # Cap candidate pool for re-rank
+        fused_items, candidate_hashes = self._rrf_fuse(lists_by_feat_and_q, prefer_common=prefer_common)
         candidate_hashes = list(candidate_hashes)[:FUSE_POOL_LIMIT]
 
-        # ---- Stage 3: Exact re-rank (L1/L2) using all sub-vectors of each candidate per feature
+        # ---- Stage 3: Exact re-rank (L1/L2) using all sub-vectors per feature
         exact_scores = self._exact_rerank(qnorm, candidate_hashes, metric=exact_metric)
 
-        # Combine features via best-over-subvecs, then sum over features (or average).
-        # exact_scores: dict[hash][feat] = best_distance_for_that_feat
         combined = []
         for h in exact_scores:
-            # Only include features that were actually queried
             dists = [exact_scores[h][f] for f in qnorm.keys() if f in exact_scores[h]]
             if not dists:
                 continue
-            # Convert to similarity-like score for final sorting (higher better)
-            sims = [1.0 / (1.0 + d) for d in dists]
-            agg_sim = float(np.mean(sims))  # average similarity across features
+            sims = [1.0 / (1.0 + d) for d in dists]  # convert distance -> similarity
+            agg_sim = float(np.mean(sims))           # average across queried features
             combined.append((h, agg_sim))
 
-        # Prefer common hashes first if requested, break ties by agg_sim
         if prefer_common:
             coverage_map = self._coverage_from_lists(lists_by_feat_and_q)
             combined.sort(key=lambda x: (coverage_map.get(x[0], 1), x[1]), reverse=True)
@@ -307,7 +288,6 @@ class MultiFeatureQdrant:
 
     # --- helpers: fusion, coverage, re-rank ---
     def _rrf_fuse(self, lists_by_feat_and_q, prefer_common=True):
-        # RRF aggregation
         rrf = {}
         coverage = {}
         for (feat, qidx), ranked in lists_by_feat_and_q.items():
@@ -327,7 +307,6 @@ class MultiFeatureQdrant:
             pool = items
 
         pool.sort(key=lambda x: (x[1], x[2], x[0]), reverse=True)
-        # candidate set by decreasing fused score
         candidate_hashes = [h for (h, _, _) in pool]
         return pool, candidate_hashes
 
@@ -356,46 +335,46 @@ class MultiFeatureQdrant:
 
         for feat in qnorm.keys():
             name = self.collection_name(feat)
-            # Scroll with hash in candidates
-            remaining = set(candidate_hashes)
-            page = None
+
+            # Scroll by chunks of candidate hashes
+            remaining = list(candidate_hashes)
             while remaining:
-                batch = list(list(remaining)[:256])  # reasonable filter size
-                remaining -= set(batch)
-                flt = Filter(must=[FieldCondition(key="hash", match=MatchAny(any=batch))])
+                chunk = remaining[:256]
+                remaining = remaining[256:]
+                flt = Filter(must=[FieldCondition(key="hash", match=MatchAny(any=chunk))])
                 points, next_page = self.client.scroll(
                     name,
                     scroll_filter=flt,
                     with_vectors=True,
-                    with_payload=WithPayloadSelector(include=PayloadIncludeSelector(fields=["hash", "sub_idx"])),
+                    with_payload=["hash", "sub_idx"],
                     limit=2048,
-                    offset=page,
                 )
                 for p in points:
-                    h = p.payload["hash"]
+                    h = p.payload.get("hash")
+                    if h is None:
+                        continue
                     per_feature_vectors[feat].setdefault(h, []).append(np.asarray(p.vector, dtype=np.float32))
-                if not next_page:
-                    continue
+                # scroll API returns next_page offset if more results match filter; loop continues automatically
 
         # Compute best distances
         out: Dict[str, Dict[int, float]] = {}
         for feat, qvecs in qnorm.items():
             cand_map = per_feature_vectors.get(feat, {})
             for h, subvecs in cand_map.items():
+                if not subvecs:
+                    continue
+                M = np.stack(subvecs, axis=0)  # (n_sub, 4096)
                 best = float("inf")
-                # best over (q in qvecs) x (v in subvecs)
                 for q in qvecs:
-                    # small optimization: vectorize over subvecs
-                    M = np.stack(subvecs, axis=0)  # (n, 4096)
                     if dist_fn is l2:
-                        # ||M - q||_2
                         dists = np.linalg.norm(M - q[None, :], axis=1)
                     else:
                         dists = np.abs(M - q[None, :]).sum(axis=1)
                     d = float(dists.min())
                     if d < best:
                         best = d
-                out.setdefault(h, {})[feat] = best
+                if best < float("inf"):
+                    out.setdefault(h, {})[feat] = best
         return out
 
 
@@ -405,19 +384,18 @@ if __name__ == "__main__":
     Example:
       1) Initialize & (re)create collections
       2) Ingest a sample parquet file
-      3) Run searches with single-vector and list-of-vectors queries
+      3) Run searches with single-vector and multi-vector queries
     """
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--parquet", type=str, required=False, help="Path to input parquet with Hash + Feature 1..5")
+    parser.add_argument("--parquet", type=str, required=False, help="Path to parquet with Hash + Feature 1..5")
     parser.add_argument("--host", type=str, default=os.getenv("QDRANT_HOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.getenv("QDRANT_PORT", "6333")))
-    parser.add_argument("--api_key", type=str, default=os.getenv("QDRANT_API_KEY"))
     parser.add_argument("--recreate", action="store_true", help="Drop & recreate collections")
     args = parser.parse_args()
 
-    engine = MultiFeatureQdrant(host=args.host, port=args.port, api_key=args.api_key)
+    engine = MultiFeatureQdrant(host=args.host, port=args.port)
     engine.ensure_collections(recreate=args.recreate)
 
     if args.parquet:
@@ -425,15 +403,13 @@ if __name__ == "__main__":
         engine.upsert_dataframe(df, batch=2048, dedupe=True)
         print("Ingestion done.")
 
-    # ---- Demo search payloads (replace with your real queries)
-    # Single-vector query for Feature 1
+    # ---- Demo search payloads (replace with real queries)
     q1 = {1: [np.random.randn(DIM).astype(np.float32)]}
     res1 = engine.search(q1, top_k=5, per_list_k=80, prefer_common=True, exact_metric="l2", hnsw_ef=HNSW_EF_SEARCH)
     print("\nSingle-feature query (F1) -> Top-5 hashes:")
     for h, s in res1:
         print(f"{h}\t score={s:.6f}")
 
-    # Multi-feature, multi-vector query (F1 + F3)
     q2 = {
         1: [np.random.randn(DIM).astype(np.float32), np.random.randn(DIM).astype(np.float32)],
         3: [np.random.randn(DIM).astype(np.float32)]
