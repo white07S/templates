@@ -1,263 +1,501 @@
-# exact_cosine_top5_torch_adaptive.py
-# Pure PyTorch, exact cosine similarity, multi-GPU sharded, adaptive chunking per GPU.
-# Input: DataFrame with columns: 'hash' (str) and 'feature_1' (4096-d embedding as list/ndarray)
-# Output: prints top-5 (hash, score) for a single 4096-d query vector.
-
-import os
-import math
-import heapq
+import faiss
 import numpy as np
 import pandas as pd
-import torch
+import pickle
+import hashlib
+from pathlib import Path
+from typing import List, Dict, Union, Tuple, Optional, Any
+from collections import defaultdict, Counter
+from dataclasses import dataclass, field
+import json
 
 
-# ------------------------
-# Utilities
-# ------------------------
-def _normalize_rows_f32(mat: np.ndarray) -> np.ndarray:
-    """L2-normalize rows in-place (float32)."""
-    mat = np.asarray(mat, dtype=np.float32, order="C")
-    norms = np.linalg.norm(mat, axis=1, keepdims=True)
-    np.maximum(norms, 1e-12, out=norms)
-    mat /= norms
-    return mat
+@dataclass
+class FeatureIndex:
+    """Container for a single feature's FAISS index and metadata"""
+    name: str
+    index: faiss.IndexFlatL2
+    hash_mapping: Dict[int, str]  # Maps FAISS index position to original hash
+    is_list_feature: bool = False
+    list_boundaries: Dict[str, Tuple[int, int]] = field(default_factory=dict)  # For list features: hash -> (start_idx, end_idx)
 
 
-def build_matrix_from_df(
-    df: pd.DataFrame,
-    col_hash: str = "hash",
-    col_vec: str = "feature_1",
-    d_expected: int = 4096,
-):
+class MultiFeatureSearchEngine:
     """
-    Convert df[col_vec] (lists/arrays) -> dense float32 matrix [N, d_expected], and normalize rows.
-    Returns (X, hashes)
+    FAISS-based search engine for multi-feature embeddings with intelligent ranking.
+    Supports both single embeddings and lists of embeddings per feature.
     """
-    hashes = df[col_hash].astype(str).tolist()
-    N = len(df)
-    X = np.empty((N, d_expected), dtype=np.float32)
-    for i, v in enumerate(df[col_vec].tolist()):
-        arr = np.asarray(v, dtype=np.float32)
-        if arr.ndim != 1 or arr.shape[0] != d_expected:
-            raise ValueError(f"Row {i} has dim {arr.shape}, expected ({d_expected},)")
-        X[i] = arr
-    X = _normalize_rows_f32(X)
-    return X, hashes
-
-
-def _bytes_per_row(d: int, dtype: torch.dtype = torch.float32, safety_overhead: float = 1.2) -> int:
-    """
-    Approx VRAM per row for GEMV (X_chunk @ q):
-      - X_chunk rows: d * bytes_per_el
-      - sims output: ~4 bytes per row
-      - workspace/overhead ~20%
-    """
-    bytes_el = {torch.float16: 2, torch.bfloat16: 2, torch.float32: 4}[dtype]
-    per_row = d * bytes_el + 4
-    return int(per_row * safety_overhead)
-
-
-def suggest_rows_per_chunk_vram(
-    rows_in_shard: int,
-    d: int,
-    dtype: torch.dtype = torch.float32,
-    device: int = 0,
-    vram_safety_frac: float = 0.80,
-    target_chunks_range=(16, 64),
-    hard_min_rows: int = 8_192,
-    hard_max_rows: int | None = None,
-) -> int:
-    """
-    Choose rows_per_chunk using real-time free VRAM and shard size so we:
-      - avoid OOM,
-      - keep ~16–64 chunks per shard for good throughput,
-      - respect absolute min/max.
-    """
-    free_bytes, _total_bytes = torch.cuda.mem_get_info(device=device)  # (free, total)
-    usable = int(free_bytes * vram_safety_frac)
-
-    mem_bound = max(1, usable // _bytes_per_row(d, dtype=dtype))
-
-    tgt_min_chunks, tgt_max_chunks = target_chunks_range
-    size_lower = max(1, rows_in_shard // tgt_max_chunks)   # larger chunks (fewer total)
-    size_upper = max(1, rows_in_shard // tgt_min_chunks)   # smaller chunks (more total)
-
-    rows = max(size_lower, min(mem_bound, size_upper))
-    rows = max(rows, hard_min_rows)
-    if hard_max_rows is not None:
-        rows = min(rows, hard_max_rows)
-    rows = min(rows, rows_in_shard)
-    return int(rows)
-
-
-# ------------------------
-# Core search
-# ------------------------
-@torch.inference_mode()
-def exact_cosine_topk_torch(
-    hashes: list[str],
-    X_np: np.ndarray,          # [N, d] float32, unit-normalized rows
-    q_np: np.ndarray,          # [d] float32 (will normalize)
-    k: int = 5,
-    compute_dtype: torch.dtype = torch.float32,  # try torch.bfloat16 on A100/H100 for speed
-    target_chunks_range=(16, 64),
-    vram_safety_frac: float = 0.80,
-    cpu_chunk_rows: int = 100_000,               # CPU fallback chunk size
-):
-    """
-    Exact cosine similarity (dot product on unit vectors). Multi-GPU sharded.
-    Returns top-k [(hash, score)].
-    """
-    d = X_np.shape[1]
-    q = np.asarray(q_np, dtype=np.float32).reshape(d)
-    q_norm = np.linalg.norm(q)
-    if q_norm < 1e-12:
-        raise ValueError("Query vector has near-zero norm.")
-    q = q / q_norm
-
-    device_count = torch.cuda.device_count()
-
-    if device_count == 0:
-        # -------------------- CPU path (exact) --------------------
-        X_t = torch.from_numpy(X_np)  # [N, d]
-        q_t = torch.from_numpy(q)
-        N = X_t.shape[0]
-        heap: list[tuple[float, int]] = []  # (score, global_idx)
-
-        for s in range(0, N, cpu_chunk_rows):
-            e = min(s + cpu_chunk_rows, N)
-            sims = torch.mv(X_t[s:e], q_t)  # [e-s]
-            tk = min(k, e - s)
-            vals, idxs = torch.topk(sims, k=tk)
-            vals = vals.tolist()
-            idxs = idxs.tolist()
-            for val, idx in zip(vals, idxs):
-                gi = s + idx
-                if len(heap) < k:
-                    heapq.heappush(heap, (val, gi))
+    
+    def __init__(self, 
+                 embedding_dim: int = 4096,
+                 cache_dir: str = "./cache",
+                 k_rrf: int = 60):  # RRF constant
+        """
+        Initialize the search engine.
+        
+        Args:
+            embedding_dim: Dimension of embeddings (default 4096)
+            cache_dir: Directory to cache embeddings
+            k_rrf: Constant for Reciprocal Rank Fusion (default 60, recommended value)
+        """
+        self.embedding_dim = embedding_dim
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        self.k_rrf = k_rrf
+        
+        # Feature indices
+        self.feature_indices: Dict[str, FeatureIndex] = {}
+        
+        # Cache for embeddings
+        self.embeddings_cache_file = self.cache_dir / "embeddings_cache.pkl"
+        self.index_cache_file = self.cache_dir / "indices_cache.pkl"
+        
+        # Load cached data if exists
+        self._load_cache()
+    
+    def _load_cache(self):
+        """Load cached embeddings and indices if they exist"""
+        if self.index_cache_file.exists():
+            try:
+                with open(self.index_cache_file, 'rb') as f:
+                    cache_data = pickle.load(f)
+                    self.feature_indices = cache_data['feature_indices']
+                    print(f"Loaded cached indices for features: {list(self.feature_indices.keys())}")
+            except Exception as e:
+                print(f"Error loading cache: {e}")
+                self.feature_indices = {}
+    
+    def _save_cache(self):
+        """Save indices to cache"""
+        try:
+            cache_data = {
+                'feature_indices': self.feature_indices
+            }
+            with open(self.index_cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            print("Saved indices to cache")
+        except Exception as e:
+            print(f"Error saving cache: {e}")
+    
+    def _get_embedding_cache_key(self, text: str, feature_name: str) -> str:
+        """Generate a unique cache key for text+feature combination"""
+        content = f"{feature_name}:{text}"
+        return hashlib.md5(content.encode()).hexdigest()
+    
+    def _load_embeddings_cache(self) -> Dict[str, np.ndarray]:
+        """Load embeddings cache from disk"""
+        if self.embeddings_cache_file.exists():
+            try:
+                with open(self.embeddings_cache_file, 'rb') as f:
+                    return pickle.load(f)
+            except:
+                return {}
+        return {}
+    
+    def _save_embeddings_cache(self, cache: Dict[str, np.ndarray]):
+        """Save embeddings cache to disk"""
+        with open(self.embeddings_cache_file, 'wb') as f:
+            pickle.dump(cache, f)
+    
+    def get_embedding(self, text: Union[str, List[str]], feature_name: str) -> Union[np.ndarray, List[np.ndarray]]:
+        """
+        Get embedding for text(s). Uses cache if available.
+        
+        This is a placeholder - replace with actual embedding function.
+        
+        Args:
+            text: Single string or list of strings
+            feature_name: Name of the feature (for caching)
+            
+        Returns:
+            Single embedding or list of embeddings
+        """
+        embeddings_cache = self._load_embeddings_cache()
+        
+        if isinstance(text, str):
+            cache_key = self._get_embedding_cache_key(text, feature_name)
+            if cache_key in embeddings_cache:
+                return embeddings_cache[cache_key]
+            
+            # Placeholder: Replace this with actual embedding generation
+            # embedding = your_embedding_function(text)
+            embedding = np.random.randn(self.embedding_dim).astype('float32')  # Placeholder
+            
+            embeddings_cache[cache_key] = embedding
+            self._save_embeddings_cache(embeddings_cache)
+            return embedding
+        
+        else:  # List of strings
+            embeddings = []
+            cache_updated = False
+            
+            for t in text:
+                cache_key = self._get_embedding_cache_key(t, feature_name)
+                if cache_key in embeddings_cache:
+                    embeddings.append(embeddings_cache[cache_key])
                 else:
-                    if val > heap[0][0]:
-                        heapq.heapreplace(heap, (val, gi))
+                    # Placeholder: Replace this with actual embedding generation
+                    # embedding = your_embedding_function(t)
+                    embedding = np.random.randn(self.embedding_dim).astype('float32')  # Placeholder
+                    
+                    embeddings_cache[cache_key] = embedding
+                    embeddings.append(embedding)
+                    cache_updated = True
+            
+            if cache_updated:
+                self._save_embeddings_cache(embeddings_cache)
+            
+            return embeddings
+    
+    def ingest_and_index(self, df: pd.DataFrame, force_reindex: bool = False):
+        """
+        Ingest data from DataFrame and create FAISS indices.
+        
+        Args:
+            df: DataFrame with columns: Hash, summary, control_deficiency, 
+                problem_statements (List[str]), issue_failing (List[str])
+            force_reindex: Force re-indexing even if cache exists
+        """
+        if self.feature_indices and not force_reindex:
+            print("Indices already exist. Use force_reindex=True to rebuild.")
+            return
+        
+        print("Starting ingestion and indexing...")
+        
+        # Process single embedding features
+        single_features = ['summary', 'control_deficiency']
+        for feature_name in single_features:
+            print(f"Processing feature: {feature_name}")
+            
+            index = faiss.IndexFlatL2(self.embedding_dim)
+            hash_mapping = {}
+            
+            embeddings_list = []
+            for idx, row in df.iterrows():
+                text = row[feature_name]
+                if pd.notna(text) and text:
+                    embedding = self.get_embedding(text, feature_name)
+                    embeddings_list.append(embedding)
+                    hash_mapping[len(embeddings_list) - 1] = row['Hash']
+            
+            if embeddings_list:
+                embeddings_array = np.vstack(embeddings_list)
+                index.add(embeddings_array)
+            
+            self.feature_indices[feature_name] = FeatureIndex(
+                name=feature_name,
+                index=index,
+                hash_mapping=hash_mapping,
+                is_list_feature=False
+            )
+        
+        # Process list embedding features
+        list_features = ['problem_statements', 'issue_failing']
+        for feature_name in list_features:
+            print(f"Processing list feature: {feature_name}")
+            
+            index = faiss.IndexFlatL2(self.embedding_dim)
+            hash_mapping = {}
+            list_boundaries = {}
+            
+            embeddings_list = []
+            for idx, row in df.iterrows():
+                text_list = row[feature_name]
+                if pd.notna(text_list) and text_list:
+                    start_idx = len(embeddings_list)
+                    
+                    embeddings = self.get_embedding(text_list, feature_name)
+                    for emb in embeddings:
+                        embeddings_list.append(emb)
+                        hash_mapping[len(embeddings_list) - 1] = row['Hash']
+                    
+                    end_idx = len(embeddings_list)
+                    list_boundaries[row['Hash']] = (start_idx, end_idx)
+            
+            if embeddings_list:
+                embeddings_array = np.vstack(embeddings_list)
+                index.add(embeddings_array)
+            
+            self.feature_indices[feature_name] = FeatureIndex(
+                name=feature_name,
+                index=index,
+                hash_mapping=hash_mapping,
+                is_list_feature=True,
+                list_boundaries=list_boundaries
+            )
+        
+        self._save_cache()
+        print(f"Indexing complete. Created indices for: {list(self.feature_indices.keys())}")
+    
+    def _search_single_feature(self, 
+                              query_vector: np.ndarray, 
+                              feature_index: FeatureIndex, 
+                              k: int = 5) -> List[Tuple[str, float]]:
+        """
+        Search a single feature index with a query vector.
+        
+        Returns:
+            List of (hash, distance) tuples
+        """
+        if feature_index.index.ntotal == 0:
+            return []
+        
+        # Ensure query vector is 2D
+        if query_vector.ndim == 1:
+            query_vector = query_vector.reshape(1, -1)
+        
+        # Search
+        distances, indices = feature_index.index.search(query_vector, min(k, feature_index.index.ntotal))
+        
+        results = []
+        seen_hashes = set()
+        
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx >= 0 and idx in feature_index.hash_mapping:
+                hash_val = feature_index.hash_mapping[idx]
+                if hash_val not in seen_hashes:
+                    results.append((hash_val, float(dist)))
+                    seen_hashes.add(hash_val)
+        
+        return results
+    
+    def _reciprocal_rank_fusion(self, 
+                                results_dict: Dict[str, List[Tuple[str, float]]]) -> List[str]:
+        """
+        Apply Reciprocal Rank Fusion to merge results from multiple features.
+        
+        Args:
+            results_dict: Dictionary mapping feature_name -> [(hash, distance), ...]
+            
+        Returns:
+            Top 5 hashes ranked by RRF score
+        """
+        rrf_scores = defaultdict(float)
+        
+        for feature_name, results in results_dict.items():
+            for rank, (hash_val, distance) in enumerate(results):
+                # RRF formula: 1 / (rank + k)
+                rrf_score = 1.0 / (rank + 1 + self.k_rrf)
+                rrf_scores[hash_val] += rrf_score
+        
+        # Sort by RRF score (descending)
+        sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Return top 5 hashes
+        return [hash_val for hash_val, _ in sorted_results[:5]]
+    
+    def search(self, 
+              query: Union[np.ndarray, List[np.ndarray]], 
+              features_to_search: Optional[List[str]] = None,
+              k_per_feature: int = 5) -> List[str]:
+        """
+        Search across multiple features with intelligent ranking.
+        
+        Args:
+            query: Single vector or list of vectors (4096-dim)
+            features_to_search: List of features to search (None = all features)
+            k_per_feature: Number of top results per feature (default 5)
+            
+        Returns:
+            Top 5 hashes based on intelligent ranking
+        """
+        if not self.feature_indices:
+            raise ValueError("No indices available. Please run ingest_and_index first.")
+        
+        if features_to_search is None:
+            features_to_search = list(self.feature_indices.keys())
+        
+        # Handle single vector query
+        if isinstance(query, np.ndarray) and query.ndim == 1:
+            query = [query]
+        elif isinstance(query, np.ndarray) and query.ndim == 2:
+            query = [query[i] for i in range(query.shape[0])]
+        
+        # Collect results from all features for all query vectors
+        all_results = defaultdict(lambda: defaultdict(list))  # query_idx -> feature -> results
+        
+        for query_idx, query_vector in enumerate(query):
+            for feature_name in features_to_search:
+                if feature_name not in self.feature_indices:
+                    continue
+                
+                feature_index = self.feature_indices[feature_name]
+                results = self._search_single_feature(query_vector, feature_index, k_per_feature)
+                all_results[query_idx][feature_name] = results
+        
+        # Merge results across query vectors
+        if len(query) == 1:
+            # Single query vector - use standard RRF
+            return self._reciprocal_rank_fusion(all_results[0])
+        else:
+            # Multiple query vectors - aggregate RRF scores
+            aggregated_scores = defaultdict(float)
+            
+            for query_idx in all_results:
+                query_results = all_results[query_idx]
+                rrf_results = self._reciprocal_rank_fusion(query_results)
+                
+                # Weight by position in RRF results
+                for rank, hash_val in enumerate(rrf_results):
+                    aggregated_scores[hash_val] += 1.0 / (rank + 1)
+            
+            # Sort by aggregated score
+            sorted_results = sorted(aggregated_scores.items(), key=lambda x: x[1], reverse=True)
+            return [hash_val for hash_val, _ in sorted_results[:5]]
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the indexed data"""
+        stats = {}
+        for feature_name, feature_index in self.feature_indices.items():
+            stats[feature_name] = {
+                'total_vectors': feature_index.index.ntotal,
+                'unique_hashes': len(set(feature_index.hash_mapping.values())),
+                'is_list_feature': feature_index.is_list_feature
+            }
 
-        top = sorted(heap, key=lambda x: x[0], reverse=True)
-        return [(hashes[i], float(s)) for s, i in top]
-
-    # -------------------- Multi-GPU path (exact) --------------------
-    torch.set_float32_matmul_precision('high')  # enable TF32 on Ampere+ where applicable
-
-    N = X_np.shape[0]
-    base = N // device_count
-    rem = N % device_count
-    shard_sizes = [base + (1 if i < rem else 0) for i in range(device_count)]
-    offsets = [0]
-    for sz in shard_sizes[:-1]:
-        offsets.append(offsets[-1] + sz)
-
-    # Place query on each device
-    q_per_dev = [torch.from_numpy(q).to(f"cuda:{i}", non_blocking=True).to(compute_dtype)
-                 for i in range(device_count)]
-
-    global_heap: list[tuple[float, int]] = []  # (score, global_idx)
-
-    for dev_id, (start, sz) in enumerate(zip(offsets, shard_sizes)):
-        if sz == 0:
-            continue
-        end = start + sz
-
-        rows_per_chunk = suggest_rows_per_chunk_vram(
-            rows_in_shard=sz,
-            d=d,
-            dtype=compute_dtype,
-            device=dev_id,
-            vram_safety_frac=vram_safety_frac,
-            target_chunks_range=target_chunks_range,
-            hard_min_rows=8_192,
-            hard_max_rows=None,  # set e.g. 250_000 if you want an upper cap
-        )
-
-        q_t = q_per_dev[dev_id]
-
-        s = start
-        while s < end:
-            e = min(s + rows_per_chunk, end)
-            X_chunk = torch.from_numpy(X_np[s:e]).to(f"cuda:{dev_id}", non_blocking=True).to(compute_dtype)
-            sims = torch.mv(X_chunk, q_t)  # exact cosine (both unit-norm)
-
-            tk = min(k, e - s)
-            vals, idxs = torch.topk(sims, k=tk)
-            vals = vals.detach().cpu().tolist()
-            idxs = idxs.detach().cpu().tolist()
-
-            for val, idx in zip(vals, idxs):
-                gi = s + idx
-                if len(global_heap) < k:
-                    heapq.heappush(global_heap, (val, gi))
-                else:
-                    if val > global_heap[0][0]:
-                        heapq.heapreplace(global_heap, (val, gi))
-
-            del X_chunk, sims
-            torch.cuda.empty_cache()
-
-            s = e
-
-    top = sorted(global_heap, key=lambda x: x[0], reverse=True)
-    return [(hashes[i], float(s)) for s, i in top]
 
 
-# ------------------------
-# Demo / CLI entry
-# ------------------------
-if __name__ == "__main__":
+import numpy as np
+import pandas as pd
+from multi_feature_search import MultiFeatureSearchEngine
+from typing import Union, List
+import time
+
+
+def get_embedding_function(text: Union[str, List[str]]) -> Union[np.ndarray, List[np.ndarray]]:
     """
-    Usage:
-      - Replace the DEMO block with your real DataFrame + query vector.
-      - Ensure df has:
-            df["hash"] -> str ids
-            df["feature_1"] -> 4096-d vectors (list/ndarray)
-      - Run:  python exact_cosine_top5_torch_adaptive.py
-      - Optional env:
-            TORCH_CUDA_ARCH_LIST, CUDA_VISIBLE_DEVICES
-            COMPUTE_DTYPE = "fp32" | "bf16" | "fp16"
+    Your actual embedding function goes here.
+    Replace this with your actual implementation.
+    
+    Args:
+        text: Single string or list of strings
+        
+    Returns:
+        4096-dimensional embedding(s)
     """
-    DEMO = os.environ.get("DEMO", "1") == "1"
+    # PLACEHOLDER: Replace with your actual embedding function
+    # Example: return model.encode(text)
+    
+    if isinstance(text, str):
+        # Single text - return single embedding
+        return np.random.randn(4096).astype('float32')
+    else:
+        # List of texts - return list of embeddings
+        return [np.random.randn(4096).astype('float32') for _ in text]
 
-    if DEMO:
-        N, d = 100_000, 4096
-        rng = np.random.default_rng(0)
-        df = pd.DataFrame({
-            "hash": [f"H_{i:06d}" for i in range(N)],
-            "feature_1": [rng.standard_normal(d).astype(np.float32) for _ in range(N)],
+
+def create_sample_data(n_rows: int = 100) -> pd.DataFrame:
+    """Create sample data for testing"""
+    data = []
+    for i in range(n_rows):
+        data.append({
+            'Hash': f'hash_{i:04d}',
+            'summary': f'This is a summary for item {i}',
+            'control_deficiency': f'Control deficiency description for item {i}',
+            'problem_statements': [f'Problem {j} for item {i}' for j in range(np.random.randint(1, 4))],
+            'issue_failing': [f'Issue {j} for item {i}' for j in range(np.random.randint(1, 3))]
         })
-        query = rng.standard_normal(d).astype(np.float32)
-    else:
-        # Example for real data:
-        # df = pd.read_parquet("/path/to/your.parquet")
-        # query = np.load("/path/to/query.npy").astype(np.float32)  # shape (4096,)
-        raise SystemExit("Load your DataFrame and query, or run with DEMO=1.")
+    return pd.DataFrame(data)
 
-    # Prepare matrix + hashes
-    X, hashes = build_matrix_from_df(df, "hash", "feature_1", d_expected=4096)
 
-    # Choose compute dtype
-    dtype_env = os.environ.get("COMPUTE_DTYPE", "fp32").lower()
-    if dtype_env in ("fp16", "float16", "half"):
-        compute_dtype = torch.float16
-    elif dtype_env in ("bf16", "bfloat16"):
-        compute_dtype = torch.bfloat16
-    else:
-        compute_dtype = torch.float32
-
-    top5 = exact_cosine_topk_torch(
-        hashes=hashes,
-        X_np=X,
-        q_np=query,
-        k=5,
-        compute_dtype=compute_dtype,
-        target_chunks_range=(16, 64),
-        vram_safety_frac=0.80,
-        cpu_chunk_rows=100_000,
+def main():
+    """Main demonstration of the multi-feature search engine"""
+    
+    print("=" * 80)
+    print("FAISS Multi-Feature Search Engine")
+    print("=" * 80)
+    
+    # Initialize the search engine
+    engine = MultiFeatureSearchEngine(
+        embedding_dim=4096,
+        cache_dir="./cache",
+        k_rrf=60  # RRF constant
     )
+    
+    # IMPORTANT: Replace the placeholder embedding function in multi_feature_search.py
+    # with your actual embedding function by modifying the get_embedding method
+    
+    # Create or load your data
+    print("\n1. Loading data...")
+    # Option 1: Load from parquet
+    # df = pd.read_parquet('your_data.parquet')
+    
+    # Option 2: Create sample data for testing
+    df = create_sample_data(100)
+    print(f"Loaded {len(df)} rows")
+    
+    # Ingest and index the data
+    print("\n2. Ingesting and indexing data...")
+    start_time = time.time()
+    engine.ingest_and_index(df, force_reindex=False)  # Set to True to force re-indexing
+    print(f"Indexing completed in {time.time() - start_time:.2f} seconds")
+    
+    # Show statistics
+    print("\n3. Index Statistics:")
+    stats = engine.get_statistics()
+    for feature, feature_stats in stats.items():
+        print(f"   {feature}:")
+        print(f"      Total vectors: {feature_stats['total_vectors']}")
+        print(f"      Unique hashes: {feature_stats['unique_hashes']}")
+        print(f"      Is list feature: {feature_stats['is_list_feature']}")
+    
+    # Example 1: Single vector query
+    print("\n4. Testing single vector query...")
+    query_vector = get_embedding_function("Sample query text about control issues")
+    
+    start_time = time.time()
+    results = engine.search(query_vector, k_per_feature=5)
+    search_time = time.time() - start_time
+    
+    print(f"   Search completed in {search_time*1000:.2f} ms")
+    print(f"   Top 5 results: {results}")
+    
+    # Example 2: Multiple vector query
+    print("\n5. Testing multiple vector query...")
+    query_texts = [
+        "Control deficiency in authentication",
+        "Problem with data validation",
+        "Issue with access control"
+    ]
+    query_vectors = get_embedding_function(query_texts)
+    
+    start_time = time.time()
+    results = engine.search(query_vectors, k_per_feature=5)
+    search_time = time.time() - start_time
+    
+    print(f"   Search completed in {search_time*1000:.2f} ms")
+    print(f"   Top 5 results (merged from multiple queries): {results}")
+    
+    # Example 3: Search specific features only
+    print("\n6. Testing search on specific features...")
+    query_vector = get_embedding_function("Security vulnerability")
+    
+    start_time = time.time()
+    results = engine.search(
+        query_vector, 
+        features_to_search=['summary', 'control_deficiency'],
+        k_per_feature=3
+    )
+    search_time = time.time() - start_time
+    
+    print(f"   Search completed in {search_time*1000:.2f} ms")
+    print(f"   Top 5 results (from selected features): {results}")
+    
+    # Show how caching works
+    print("\n7. Demonstrating caching...")
+    print("   Running the same query again (should use cache)...")
+    
+    start_time = time.time()
+    results = engine.search(query_vector, k_per_feature=5)
+    search_time = time.time() - start_time
+    
+    print(f"   Search completed in {search_time*1000:.2f} ms (faster due to caching)")
+    
+    print("\n" + "=" * 80)
+    print("Demo completed successfully!")
+    print("=" * 80)
 
-    for h, s in top5:
-        print(f"{h}\t{s:.6f}")
+
+if __name__ == "__main__":
+    main()
+        return stats
