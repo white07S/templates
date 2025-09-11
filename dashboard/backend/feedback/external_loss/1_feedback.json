@@ -1,0 +1,42 @@
+[
+  {
+    "id": "fdbbcf08-c6b7-417e-a3f3-be770f9cd266",
+    "record_id": 1,
+    "feedback_type": "text",
+    "value": "This record looks accurate",
+    "additional_notes": "Verified by manual review",
+    "timestamp": "2025-09-08T13:23:54.337402"
+  },
+  {
+    "id": "34eeb33b-87a0-462a-9c96-5634badd52f7",
+    "record_id": 1,
+    "feedback_type": "rating",
+    "value": "4",
+    "additional_notes": null,
+    "timestamp": "2025-09-08T13:25:16.594560"
+  },
+  {
+    "id": "e4101429-4d66-405d-a851-587540862454",
+    "record_id": 1,
+    "feedback_type": "rating",
+    "value": "4",
+    "additional_notes": "sfsd",
+    "timestamp": "2025-09-08T13:25:29.625426"
+  },
+  {
+    "id": "d40fdd1e-38b7-4a1f-a298-3f269ddc6462",
+    "record_id": 1,
+    "feedback_type": "approval",
+    "value": "approved",
+    "additional_notes": null,
+    "timestamp": "2025-09-08T13:25:32.950131"
+  },
+  {
+    "id": "27c50031-15a0-40bc-84a7-e080b2e7576d",
+    "record_id": 1,
+    "feedback_type": "issue",
+    "value": "dsf",
+    "additional_notes": "asd",
+    "timestamp": "2025-09-08T17:53:04.886336"
+  }
+]

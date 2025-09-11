@@ -1,0 +1,57 @@
+already installed backend , frontend as folder setup,
+use uv add lib, 
+
+tailwind and frontend is configured.
+
+backend:
+fastapi, pydantic, 
+
+pagination:
+lazy loading.
+
+
+
+
+frontend:
+
+single page dashboard app:
+
+There are four datasets:
+External Loss, Internal Loss, Issues, Controls
+
+for each of dataset create basic card for stats.
+Each dataset have there own details page and it change item,
+, here is how its being called:
+There is home App.js calling dashboad.js
+
+that dashboard.js takes user as parameter
+
+them dashboard can have its own set of components.
+
+, lib to use: framer motion, lucide react, and tailwind.
+
+on main screen:
+
+there will be always follwing: columns:
+id, description, ai_taxonomy, current_erms_taxonomy, 
+
+in details there will be always three json:
+raw_meta_deta, ai_taxonomy, ai_root_cause, ai_enrichment, for now normally render the json, we will adjust later.
+
+
+should be able to filter on ai_taxonomy and current_erms_taxonomy and description as live search and table should update live, design scalable search feature such that i can extend to more than 300k rows.
+
+for each id, design a feedback form which is in details render, for now keep it simple but make it extensible in term so options of feedback like dropdown, free form text etc. save to tiny db with id.
+
+
+
+create csv file for testing with dummpy data. for filters create discord like sidebar .
+
+
+
+
+
+
+
+
+Design preference: no black background, no black theme, boxy design, red, white, black as color pallate.
