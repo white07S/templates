@@ -4,8 +4,7 @@ import { useDashboard } from '../contexts/DashboardContext';
 import StatsCards from './StatsCards';
 import DataTable from './DataTable';
 import SearchBar from './SearchBar';
-import DetailModal from './DetailModal';
-import FeedbackModal from './FeedbackModal';
+import CombinedDetailView from './CombinedDetailView';
 
 const Dashboard = ({ user = "default_user" }) => {
   const { state, actions } = useDashboard();
@@ -118,9 +117,8 @@ const Dashboard = ({ user = "default_user" }) => {
         )}
       </div>
 
-      {/* Modals */}
-      <DetailModal />
-      <FeedbackModal />
+      {/* Combined Detail View Modal */}
+      <CombinedDetailView />
     </div>
   );
 };

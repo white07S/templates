@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Eye, MessageSquare } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 import { useDashboard } from '../contexts/DashboardContext';
 
-const TableRow = ({ record, index, onClick, onFeedback }) => {
+const TableRow = ({ record, index, onClick }) => {
   return (
     <motion.tr
       initial={{ opacity: 0, y: 10 }}
@@ -31,25 +31,16 @@ const TableRow = ({ record, index, onClick, onFeedback }) => {
         </span>
       </td>
       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-        <div className="flex items-center justify-end space-x-2">
-          <button 
-            onClick={() => onClick(record)}
-            className="text-gray-400 hover:text-primary-600 transition-colors"
-            title="View Details"
-          >
-            <Eye className="h-4 w-4" />
-          </button>
-          <button 
-            onClick={(e) => {
-              e.stopPropagation();
-              onFeedback(e, record);
-            }}
-            className="text-gray-400 hover:text-primary-600 transition-colors"
-            title="Give Feedback"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-        </div>
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onClick(record);
+          }}
+          className="text-gray-400 hover:text-primary-600 transition-colors"
+          title="View Details & Feedback"
+        >
+          <Eye className="h-5 w-5" />
+        </button>
       </td>
     </motion.tr>
   );
@@ -156,13 +147,9 @@ const DataTable = () => {
   const { state, actions } = useDashboard();
 
   const handleRecordClick = async (record) => {
-    // Fetch full record details and open modal
+    // Fetch full record details and open combined view modal
     await actions.fetchRecordDetail(state.selectedDataset, record.id);
-  };
-
-  const handleFeedbackClick = (e, record) => {
-    e.stopPropagation();
-    actions.setFeedbackRecord(record);
+    actions.setCombinedViewOpen(true);
   };
 
   const handlePageSizeChange = (newSize) => {
@@ -257,7 +244,6 @@ const DataTable = () => {
                 record={record}
                 index={index}
                 onClick={handleRecordClick}
-                onFeedback={handleFeedbackClick}
               />
             ))}
           </tbody>

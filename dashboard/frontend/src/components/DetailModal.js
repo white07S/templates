@@ -91,61 +91,69 @@ const DetailModal = () => {
 
             {/* Content */}
             <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 88px)' }}>
-              {/* Basic Information */}
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-3">Description</h3>
-                <div className="p-4 bg-gray-50">
-                  <p className="text-gray-800 leading-relaxed">{state.detailRecord?.description}</p>
-                </div>
-              </div>
-
-              {/* Taxonomies */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">AI Taxonomy</h3>
-                  <div className="p-4 bg-blue-50 border border-blue-200">
-                    <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-blue-100 text-blue-800">
-                      {state.detailRecord?.ai_taxonomy}
-                    </span>
-                  </div>
-                </div>
-                
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">ERMS Taxonomy</h3>
-                  <div className="p-4 bg-purple-50 border border-purple-200">
-                    <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-purple-100 text-purple-800">
-                      {state.detailRecord?.current_erms_taxonomy}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* JSON Data Sections */}
-              <JsonViewer
-                title="Raw Metadata"
-                data={state.detailRecord?.raw_meta_data}
-                icon={FileText}
-                color="blue"
-              />
-              
-              <JsonViewer
-                title="AI Root Cause Analysis"
-                data={state.detailRecord?.ai_root_cause}
-                icon={Brain}
-                color="green"
-              />
-              
-              <JsonViewer
-                title="AI Enrichment"
-                data={state.detailRecord?.ai_enrichment}
-                icon={Lightbulb}
-                color="orange"
-              />
+              <DetailContent record={state.detailRecord} />
             </div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
+  );
+};
+
+export const DetailContent = ({ record }) => {
+  return (
+    <>
+      {/* Basic Information */}
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-3">Description</h3>
+        <div className="p-4 bg-gray-50">
+          <p className="text-gray-800 leading-relaxed">{record?.description}</p>
+        </div>
+      </div>
+
+      {/* Taxonomies */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-3">AI Taxonomy</h3>
+          <div className="p-4 bg-blue-50 border border-blue-200">
+            <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-blue-100 text-blue-800">
+              {record?.ai_taxonomy}
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-3">ERMS Taxonomy</h3>
+          <div className="p-4 bg-purple-50 border border-purple-200">
+            <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-purple-100 text-purple-800">
+              {record?.current_erms_taxonomy}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* JSON Data Sections */}
+      <JsonViewer
+        title="Raw Metadata"
+        data={record?.raw_meta_data}
+        icon={FileText}
+        color="blue"
+      />
+
+      <JsonViewer
+        title="AI Root Cause Analysis"
+        data={record?.ai_root_cause}
+        icon={Brain}
+        color="green"
+      />
+
+      <JsonViewer
+        title="AI Enrichment"
+        data={record?.ai_enrichment}
+        icon={Lightbulb}
+        color="orange"
+      />
+    </>
   );
 };
 

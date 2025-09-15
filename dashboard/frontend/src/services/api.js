@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8001';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 class ApiService {
   async request(endpoint, options = {}) {
@@ -63,17 +63,10 @@ class ApiService {
   }
 
   // Feedback endpoints
-  async submitFeedback(recordId, feedback) {
+  async submitFeedback(feedback) {
     return this.request(`/api/feedback`, {
       method: 'POST',
-      body: JSON.stringify({
-        item_id: recordId,
-        feedback_type: feedback.feedback_type || 'text',
-        value: feedback.value,
-        metadata: {
-          additional_notes: feedback.additional_notes
-        }
-      }),
+      body: JSON.stringify(feedback),
     });
   }
 

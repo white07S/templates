@@ -27,6 +27,7 @@ const initialState = {
   error: null,
   detailRecord: null,
   feedbackRecord: null,
+  combinedViewOpen: false,
 };
 
 function dashboardReducer(state, action) {
@@ -84,6 +85,9 @@ function dashboardReducer(state, action) {
     
     case 'SET_FEEDBACK_RECORD':
       return { ...state, feedbackRecord: action.payload };
+    
+    case 'SET_COMBINED_VIEW_OPEN':
+      return { ...state, combinedViewOpen: action.payload };
     
     case 'CLEAR_ERROR':
       return { ...state, error: null };
@@ -177,6 +181,16 @@ export const DashboardProvider = ({ children }) => {
     fetchRecordDetail,
     setDetailRecord: (record) => dispatch({ type: 'SET_DETAIL_RECORD', payload: record }),
     setFeedbackRecord: (record) => dispatch({ type: 'SET_FEEDBACK_RECORD', payload: record }),
+    setCombinedViewOpen: (isOpen) => dispatch({ type: 'SET_COMBINED_VIEW_OPEN', payload: isOpen }),
+    submitFeedback: async (feedback) => {
+      try {
+        const response = await apiService.submitFeedback(feedback);
+        return response;
+      } catch (error) {
+        dispatch({ type: 'SET_ERROR', payload: error.message });
+        throw error;
+      }
+    },
     clearError: () => dispatch({ type: 'CLEAR_ERROR' })
   };
 

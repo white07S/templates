@@ -49,8 +49,8 @@ const FeedbackTypeSelector = ({ selectedType, onTypeChange, datasetType }) => {
   const feedbackTypes = getFeedbackTypes();
 
   return (
-    <div className="mb-6">
-      <h3 className="text-lg font-semibold text-gray-900 mb-3">Feedback Type</h3>
+    <div className="border-4 border-gray-300 bg-white p-4">
+      <h3 className="font-bold text-gray-800 mb-4 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Select Feedback Type</h3>
       <div className="grid grid-cols-2 gap-3">
         {feedbackTypes.map(type => {
           const Icon = type.icon;
@@ -59,20 +59,20 @@ const FeedbackTypeSelector = ({ selectedType, onTypeChange, datasetType }) => {
               key={type.value}
               onClick={() => onTypeChange(type.value)}
               className={`
-                p-4 border-2 transition-all duration-200 text-left
+                p-4 border-4 transition-all duration-200 text-left
                 ${selectedType === type.value
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 hover:border-gray-300 bg-white'
+                  ? 'border-primary-600 bg-primary-100'
+                  : 'border-gray-400 hover:border-gray-500 bg-gray-50'
                 }
               `}
             >
               <div className="flex items-center mb-2">
-                <Icon className={`h-5 w-5 mr-2 ${selectedType === type.value ? 'text-primary-600' : 'text-gray-400'}`} />
-                <span className={`font-medium ${selectedType === type.value ? 'text-primary-900' : 'text-gray-700'}`}>
+                <Icon className={`h-5 w-5 mr-2 ${selectedType === type.value ? 'text-primary-700' : 'text-gray-600'}`} />
+                <span className={`font-bold uppercase text-xs ${selectedType === type.value ? 'text-primary-900' : 'text-gray-800'}`}>
                   {type.label}
                 </span>
               </div>
-              <p className={`text-sm ${selectedType === type.value ? 'text-primary-700' : 'text-gray-500'}`}>
+              <p className={`text-sm ${selectedType === type.value ? 'text-primary-800 font-medium' : 'text-gray-600'}`}>
                 {type.description}
               </p>
             </button>
@@ -256,7 +256,7 @@ const FeedbackModal = () => {
         value={feedbackValue}
         onChange={(e) => setFeedbackValue(e.target.value)}
         placeholder={getPlaceholder()}
-        className="w-full px-3 py-2 border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+        className="w-full px-3 py-2 border-2 border-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-medium"
         rows={4}
       />
     );
@@ -290,111 +290,181 @@ const FeedbackModal = () => {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             onClick={(e) => e.stopPropagation()}
-            className="bg-white shadow-2xl w-[90vw] h-[85vh] max-w-7xl overflow-hidden"
+            className="bg-gray-200 shadow-2xl w-[95vw] h-[90vh] max-w-[1600px] overflow-hidden"
           >
-            {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Feedback for Record #{record?.id}
-                </h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  {record?.description?.substring(0, 100)}...
-                </p>
-              </div>
-              
-              <button
-                onClick={closeModal}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="h-6 w-6" />
-              </button>
-            </div>
+            {/* Book Container */}
+            <div className="h-full flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between px-8 py-4 bg-white border-b-4 border-gray-300">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Feedback for Record #{record?.id}
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">View details on the left, provide feedback on the right</p>
+                </div>
 
-            {/* Content */}
-            <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 88px)' }}>
-              {/* Existing Feedback */}
-              {existingFeedback.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Previous Feedback</h3>
-                  <div className="space-y-3">
-                    {existingFeedback.map((feedback, index) => (
-                      <div key={feedback.id} className="p-4 bg-gray-50">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-gray-200 text-gray-800 capitalize">
-                            {feedback.feedback_type}
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            {new Date(feedback.timestamp).toLocaleDateString()}
+                <button
+                  onClick={closeModal}
+                  className="text-gray-400 hover:text-gray-600 transition-colors p-2"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
+
+              {/* Book Pages Container */}
+              <div className="flex-1 flex p-4 gap-2 overflow-hidden bg-gray-200">
+                {/* Left Page - Details */}
+                <div className="flex-1 bg-white border-4 border-gray-300 overflow-hidden flex flex-col"
+                     style={{
+                       boxShadow: 'inset 4px 0 12px rgba(0,0,0,0.15), 4px 4px 20px rgba(0,0,0,0.3)',
+                       borderRadius: '0 8px 8px 0'
+                     }}>
+                  {/* Left Page Header */}
+                  <div className="px-6 py-4 border-b-4 border-gray-200 bg-gradient-to-r from-gray-50 to-white">
+                    <h3 className="text-lg font-bold text-gray-800 uppercase tracking-wide">Record Details</h3>
+                  </div>
+
+                  {/* Left Page Content */}
+                  <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                    {/* Record Info */}
+                    <div className="space-y-4">
+                      <div className="border-4 border-gray-300 bg-white p-4">
+                        <h4 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Description</h4>
+                        <p className="text-gray-700 leading-relaxed">
+                          {record?.description || 'No description available'}
+                        </p>
+                      </div>
+
+                      {record?.dataset_type && (
+                        <div className="border-4 border-gray-300 bg-white p-4">
+                          <h4 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Dataset Type</h4>
+                          <span className="inline-block px-4 py-2 bg-gray-200 border-2 border-gray-400 text-gray-800 font-bold uppercase text-sm">
+                            {record.dataset_type.replace('_', ' ')}
                           </span>
                         </div>
-                        <p className="text-gray-700">{feedback.value}</p>
-                        {feedback.additional_notes && (
-                          <p className="text-sm text-gray-600 mt-1 italic">
-                            Note: {feedback.additional_notes}
+                      )}
+
+                      {/* Additional record details */}
+                      {Object.entries(record || {}).filter(([key]) =>
+                        !['id', 'description', 'dataset_type'].includes(key)
+                      ).map(([key, value]) => (
+                        <div key={key} className="border-4 border-gray-300 bg-white p-4">
+                          <h4 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">
+                            {key.replace(/_/g, ' ')}
+                          </h4>
+                          <p className="text-gray-700">
+                            {typeof value === 'object' ? JSON.stringify(value, null, 2) : value}
                           </p>
-                        )}
-                      </div>
-                    ))}
+                        </div>
+                      ))}
+
+                      {/* Previous Feedback on Left Page */}
+                      {existingFeedback.length > 0 && (
+                        <div className="border-4 border-gray-300 bg-white p-4">
+                          <h4 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Previous Feedback</h4>
+                          <div className="space-y-3">
+                            {existingFeedback.map((feedback) => (
+                              <div key={feedback.id} className="p-3 bg-gray-100 border-2 border-gray-400">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="inline-flex items-center px-3 py-1 text-xs font-bold bg-gray-300 border-2 border-gray-500 text-gray-800 uppercase">
+                                    {feedback.feedback_type}
+                                  </span>
+                                  <span className="text-xs text-gray-600 font-bold">
+                                    {new Date(feedback.timestamp).toLocaleDateString()}
+                                  </span>
+                                </div>
+                                <p className="text-gray-800 text-sm font-medium">{feedback.value}</p>
+                                {feedback.additional_notes && (
+                                  <p className="text-xs text-gray-600 mt-2 italic border-t-2 border-gray-300 pt-2">
+                                    Note: {feedback.additional_notes}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              )}
 
-              {/* New Feedback Form */}
-              <form onSubmit={handleSubmit}>
-                <FeedbackTypeSelector
-                  selectedType={feedbackType}
-                  onTypeChange={setFeedbackType}
-                  datasetType={record?.dataset_type}
-                />
-
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Your Feedback</h3>
-                  {renderFeedbackInput()}
+                {/* Book Spine/Binding */}
+                <div className="w-8 bg-gradient-to-r from-gray-400 via-gray-300 to-gray-400 shadow-inner flex items-center justify-center">
+                  <div className="h-full w-0.5 bg-gray-600 opacity-30"></div>
                 </div>
 
-                {/* Additional Notes */}
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Additional Notes (Optional)</h3>
-                  <textarea
-                    value={additionalNotes}
-                    onChange={(e) => setAdditionalNotes(e.target.value)}
-                    placeholder="Any additional context or notes..."
-                    className="w-full px-3 py-2 border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                    rows={3}
-                  />
-                </div>
+                {/* Right Page - Feedback Form */}
+                <div className="flex-1 bg-white border-4 border-gray-300 overflow-hidden flex flex-col"
+                     style={{
+                       boxShadow: 'inset -4px 0 12px rgba(0,0,0,0.15), -4px 4px 20px rgba(0,0,0,0.3)',
+                       borderRadius: '8px 0 0 8px'
+                     }}>
+                  {/* Right Page Header */}
+                  <div className="px-6 py-4 border-b-4 border-gray-200 bg-gradient-to-l from-gray-50 to-white">
+                    <h3 className="text-lg font-bold text-gray-800 uppercase tracking-wide">Provide Feedback</h3>
+                  </div>
 
-                {/* Submit Button */}
-                <div className="flex justify-end space-x-3">
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    className="btn-secondary"
-                    disabled={isSubmitting}
-                  >
-                    Cancel
-                  </button>
-                  
-                  <button
-                    type="submit"
-                    disabled={!feedbackValue.trim() || isSubmitting}
-                    className="btn-primary flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
-                        Submitting...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-4 w-4 mr-2" />
-                        Submit Feedback
-                      </>
-                    )}
-                  </button>
+                  {/* Right Page Content */}
+                  <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                    <form onSubmit={handleSubmit} className="h-full flex flex-col">
+                      <div className="flex-1 space-y-4">
+                        <FeedbackTypeSelector
+                          selectedType={feedbackType}
+                          onTypeChange={setFeedbackType}
+                          datasetType={record?.dataset_type}
+                        />
+
+                        <div className="border-4 border-gray-300 bg-white p-4">
+                          <h3 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Your Feedback</h3>
+                          {renderFeedbackInput()}
+                        </div>
+
+                        {/* Additional Notes */}
+                        <div className="border-4 border-gray-300 bg-white p-4">
+                          <h3 className="font-bold text-gray-800 mb-3 uppercase text-sm tracking-wide border-b-2 border-gray-200 pb-2">Additional Notes (Optional)</h3>
+                          <textarea
+                            value={additionalNotes}
+                            onChange={(e) => setAdditionalNotes(e.target.value)}
+                            placeholder="Any additional context or notes..."
+                            className="w-full px-3 py-2 border-2 border-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                            rows={3}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Submit Buttons - Fixed at bottom */}
+                      <div className="flex justify-end space-x-3 pt-4 mt-auto border-t-4 border-gray-300">
+                        <button
+                          type="button"
+                          onClick={closeModal}
+                          className="px-6 py-3 border-4 border-gray-400 bg-gray-200 text-gray-800 font-bold uppercase tracking-wide hover:bg-gray-300 transition-colors"
+                          disabled={isSubmitting}
+                        >
+                          Cancel
+                        </button>
+
+                        <button
+                          type="submit"
+                          disabled={!feedbackValue.trim() || isSubmitting}
+                          className="px-6 py-3 border-4 border-primary-600 bg-primary-500 text-white font-bold uppercase tracking-wide hover:bg-primary-600 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                              Submitting...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="h-4 w-4 mr-2" />
+                              Submit Feedback
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
                 </div>
-              </form>
+              </div>
             </div>
           </motion.div>
         </motion.div>
@@ -403,4 +473,5 @@ const FeedbackModal = () => {
   );
 };
 
+export { FeedbackTypeSelector, RatingInput, ApprovalInput };
 export default FeedbackModal;
