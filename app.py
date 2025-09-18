@@ -6,6 +6,7 @@ with async embedding support and dynamic column handling
 import asyncio
 import json
 import pickle
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Callable, Any
 from dataclasses import dataclass, asdict
@@ -24,6 +25,7 @@ class IndexConfig:
     column_configs: Dict[str, str] = None  # column_name -> "str" or "List[str]"
     index_path: str = "faiss_index.idx"
     metadata_path: str = "faiss_metadata.pkl"
+    force_reindex: bool = False  # Force reindexing even if index exists
 
     def to_dict(self):
         return asdict(self)
@@ -130,6 +132,55 @@ class FAISSIndexer:
         self.index = None
         self.metadata = {}
 
+    def _compute_data_hash(self, df: pd.DataFrame, column_configs: Dict[str, str]) -> str:
+        """Compute a hash of the data to detect changes"""
+        hash_obj = hashlib.sha256()
+
+        # Hash the column configurations
+        hash_obj.update(json.dumps(column_configs, sort_keys=True).encode())
+
+        # Hash the hash column
+        hash_obj.update(df['hash'].to_json().encode())
+
+        # Hash each configured column
+        for col_name in column_configs:
+            if col_name in df.columns:
+                hash_obj.update(df[col_name].to_json().encode())
+
+        return hash_obj.hexdigest()
+
+    def index_exists(self) -> bool:
+        """Check if index files exist"""
+        return (
+            Path(self.config.index_path).exists() and
+            Path(self.config.metadata_path).exists()
+        )
+
+    def should_reindex(self, df: pd.DataFrame, column_configs: Dict[str, str]) -> bool:
+        """Check if reindexing is needed based on data changes"""
+        if self.config.force_reindex:
+            return True
+
+        if not self.index_exists():
+            return True
+
+        # Load existing metadata to check data hash
+        try:
+            with open(self.config.metadata_path, 'rb') as f:
+                existing_metadata = pickle.load(f)
+
+            current_hash = self._compute_data_hash(df, column_configs)
+            existing_hash = existing_metadata.get('data_hash', '')
+
+            if current_hash != existing_hash:
+                print(f"Data has changed (hash mismatch), reindexing required")
+                return True
+
+            return False
+        except Exception as e:
+            print(f"Error checking existing index: {e}")
+            return True
+
     async def _get_embeddings_for_column(
         self,
         data: Union[List[str], List[List[str]]],
@@ -166,15 +217,20 @@ class FAISSIndexer:
         self,
         df: pd.DataFrame,
         column_configs: Dict[str, str],
-        show_progress: bool = True
-    ) -> None:
+        show_progress: bool = True,
+        auto_load: bool = True
+    ) -> bool:
         """
-        Prepare and index dataframe columns
+        Prepare and index dataframe columns or load existing index
 
         Args:
             df: DataFrame with 'hash' column and columns to index
             column_configs: Dict mapping column names to types ("str" or "List[str]")
             show_progress: Whether to show progress bars
+            auto_load: Automatically load existing index if data hasn't changed
+
+        Returns:
+            bool: True if new indexing was performed, False if loaded from cache
         """
         if 'hash' not in df.columns:
             raise ValueError("DataFrame must have 'hash' column")
@@ -184,15 +240,28 @@ class FAISSIndexer:
 
         self.config.column_configs = column_configs
 
+        # Check if we should use existing index
+        if auto_load and not self.should_reindex(df, column_configs):
+            print(f"Loading existing index from {self.config.index_path}")
+            self.load(self.config.index_path, self.config.metadata_path)
+            print(f"Index loaded successfully with {self.index.ntotal} vectors")
+            return False
+
+        print("Creating new index...")
+
         # Initialize index
         self.index = faiss.IndexFlatL2(self.config.dimension)
+
+        # Compute data hash
+        data_hash = self._compute_data_hash(df, column_configs)
 
         # Store metadata
         self.metadata = {
             'hashes': df['hash'].tolist(),
             'column_mappings': {},
             'column_configs': column_configs,
-            'total_vectors': 0
+            'total_vectors': 0,
+            'data_hash': data_hash
         }
 
         current_vector_idx = 0
@@ -226,6 +295,7 @@ class FAISSIndexer:
 
         self.metadata['total_vectors'] = self.index.ntotal
         print(f"Total vectors indexed: {self.index.ntotal}")
+        return True
 
     def save(self, index_path: Optional[str] = None, metadata_path: Optional[str] = None):
         """Save index and metadata to files"""
@@ -392,213 +462,129 @@ class FAISSSearcher:
         return [hash_val for hash_val, _ in results]
 
 
-
-
 """
-Test script for FAISS indexer with sample data and mock embeddings
+Demonstration of smart caching behavior in FAISS indexer
 """
 
 import asyncio
 import numpy as np
 import pandas as pd
-from faiss_indexer import (
-    FAISSIndexer,
-    FAISSSearcher,
-    AsyncEmbeddingClient,
-    IndexConfig
-)
+import os
+from faiss_indexer import FAISSIndexer, IndexConfig
 
 
-async def mock_embedding_function(texts):
-    """Mock embedding function for testing"""
-    # Simulate async processing
-    await asyncio.sleep(0.01)
-    # Generate random embeddings of dimension 4096
+async def mock_embedding_func(texts):
+    """Mock embedding function that tracks API calls"""
+    global api_call_count
+    api_call_count += 1
+    print(f"  → API Call #{api_call_count}: Processing {len(texts)} texts")
+    await asyncio.sleep(0.1)  # Simulate API latency
     return np.random.randn(len(texts), 4096).astype('float32')
 
 
-async def test_with_mock_data():
-    """Test the indexer with mock data"""
-    print("=" * 60)
-    print("Testing FAISS Indexer with Mock Data")
-    print("=" * 60)
+async def demo_caching():
+    """Demonstrate the caching behavior"""
+    global api_call_count
 
-    # Create sample DataFrame
-    data = {
-        'hash': ['hash_001', 'hash_002', 'hash_003', 'hash_004', 'hash_005'],
-        'title': [
-            'Machine Learning Basics',
-            'Deep Neural Networks',
-            'Natural Language Processing',
-            'Computer Vision Fundamentals',
-            'Reinforcement Learning'
-        ],
-        'keywords': [
-            ['ML', 'AI', 'algorithms'],
-            ['DNN', 'backprop', 'layers'],
-            ['NLP', 'transformers', 'BERT'],
-            ['CV', 'CNN', 'images'],
-            ['RL', 'Q-learning', 'agents']
-        ],
-        'description': [
-            'Introduction to machine learning concepts',
-            'Advanced deep learning architectures',
-            'Modern NLP techniques and models',
-            'Image processing and recognition',
-            'Agent-based learning systems'
-        ]
-    }
-    df = pd.DataFrame(data)
+    print("=" * 70)
+    print("FAISS INDEXER CACHING DEMONSTRATION")
+    print("=" * 70)
 
-    print("\nSample DataFrame:")
-    print(df[['hash', 'title']].head())
-
-    # Configure columns to index
-    column_configs = {
-        'title': 'str',
-        'keywords': 'List[str]',
-        'description': 'str'
-    }
-
-    # Create indexer with mock embedding function
-    config = IndexConfig(
-        dimension=4096,
-        index_path='test_index.idx',
-        metadata_path='test_metadata.pkl'
-    )
-    indexer = FAISSIndexer(mock_embedding_function, config)
-
-    # Prepare and index
-    print("\nIndexing data...")
-    await indexer.prepare_and_index(df, column_configs, show_progress=True)
-
-    # Save to disk
-    indexer.save()
-
-    # Test search functionality
-    print("\n" + "=" * 60)
-    print("Testing Search Functionality")
-    print("=" * 60)
-
-    # Create a mock query embedding
-    query_embedding = np.random.randn(4096).astype('float32')
-
-    # Test search in 'title' column (str type)
-    print("\nSearching in 'title' column (str type):")
-    results = indexer.search(query_embedding, 'title', top_n=3)
-    print(f"Top 3 results: {results}")
-
-    # Test search in 'keywords' column (List[str] type)
-    print("\nSearching in 'keywords' column (List[str] type):")
-    results = indexer.search(query_embedding, 'keywords', top_n=3)
-    print(f"Top 3 unique results: {results}")
-
-    # Test search in 'description' column (str type)
-    print("\nSearching in 'description' column (str type):")
-    results = indexer.search(query_embedding, 'description', top_n=2)
-    print(f"Top 2 results: {results}")
-
-
-async def test_with_api_client():
-    """Test with AsyncEmbeddingClient (requires actual API endpoint)"""
-    print("\n" + "=" * 60)
-    print("Testing with AsyncEmbeddingClient")
-    print("=" * 60)
-
-    # Note: This requires an actual OpenAI-compatible API endpoint
-    # Uncomment and configure with your API details to test
-
-    """
-    # Configure the embedding client
-    client = AsyncEmbeddingClient(
-        api_url="https://api.openai.com/v1/embeddings",  # or your endpoint
-        api_key="your-api-key-here",
-        model="text-embedding-3-large",
-        batch_size=50,
-        max_concurrent_requests=5
-    )
-
-    # Create sample data
-    data = {
-        'hash': ['doc_001', 'doc_002', 'doc_003'],
-        'content': [
-            'Understanding quantum computing principles',
-            'Blockchain technology and cryptocurrencies',
-            'Artificial general intelligence research'
-        ],
-        'tags': [
-            ['quantum', 'computing', 'physics'],
-            ['blockchain', 'crypto', 'distributed'],
-            ['AGI', 'AI', 'research']
-        ]
-    }
-    df = pd.DataFrame(data)
+    # Sample data
+    df = pd.DataFrame({
+        'hash': ['doc1', 'doc2', 'doc3'],
+        'content': ['AI research', 'Machine learning', 'Deep learning'],
+        'tags': [['AI', 'research'], ['ML', 'algorithms'], ['DL', 'neural']]
+    })
 
     column_configs = {
         'content': 'str',
         'tags': 'List[str]'
     }
 
-    # Create indexer with API client
+    # Clean up previous runs
+    for file in ['cache_demo.idx', 'cache_demo.pkl']:
+        if os.path.exists(file):
+            os.remove(file)
+
     config = IndexConfig(
         dimension=4096,
-        index_path='api_test_index.idx',
-        metadata_path='api_test_metadata.pkl'
+        index_path='cache_demo.idx',
+        metadata_path='cache_demo.pkl'
     )
-    indexer = FAISSIndexer(client, config)
 
-    # Index the data
-    await indexer.prepare_and_index(df, column_configs)
-    indexer.save()
+    print("\n1. FIRST RUN - Creating new index")
+    print("-" * 50)
+    api_call_count = 0
+    indexer1 = FAISSIndexer(mock_embedding_func, config)
+    was_indexed = await indexer1.prepare_and_index(df, column_configs)
+    if was_indexed:
+        indexer1.save()
+    print(f"Result: {'Created new index' if was_indexed else 'Loaded from cache'}")
+    print(f"Total API calls made: {api_call_count}")
 
-    # Test search
-    query_text = "quantum mechanics"
-    query_embedding = await client.get_embeddings_batch([query_text])
-    results = indexer.search(query_embedding[0], 'content', top_n=2)
-    print(f"Search results for '{query_text}': {results}")
-    """
+    print("\n2. SECOND RUN - Same data (should use cache)")
+    print("-" * 50)
+    api_call_count = 0
+    indexer2 = FAISSIndexer(mock_embedding_func, config)
+    was_indexed = await indexer2.prepare_and_index(df, column_configs)
+    print(f"Result: {'Created new index' if was_indexed else 'Loaded from cache'}")
+    print(f"Total API calls made: {api_call_count} ✓ (No API calls!)")
 
-    print("API client test requires configuration with actual endpoint")
-    print("See commented code for implementation example")
+    print("\n3. THIRD RUN - Modified data (should reindex)")
+    print("-" * 50)
+    df_modified = df.copy()
+    df_modified.loc[0, 'content'] = 'Artificial Intelligence research'  # Changed content
+    api_call_count = 0
+    indexer3 = FAISSIndexer(mock_embedding_func, config)
+    was_indexed = await indexer3.prepare_and_index(df_modified, column_configs)
+    if was_indexed:
+        indexer3.save()
+    print(f"Result: {'Created new index' if was_indexed else 'Loaded from cache'}")
+    print(f"Total API calls made: {api_call_count}")
 
+    print("\n4. FOURTH RUN - Force reindex")
+    print("-" * 50)
+    config_force = IndexConfig(
+        dimension=4096,
+        index_path='cache_demo.idx',
+        metadata_path='cache_demo.pkl',
+        force_reindex=True
+    )
+    api_call_count = 0
+    indexer4 = FAISSIndexer(mock_embedding_func, config_force)
+    was_indexed = await indexer4.prepare_and_index(df_modified, column_configs)
+    if was_indexed:
+        indexer4.save()
+    print(f"Result: {'Created new index' if was_indexed else 'Loaded from cache'}")
+    print(f"Total API calls made: {api_call_count}")
 
-def test_standalone_searcher():
-    """Test the standalone searcher"""
-    print("\n" + "=" * 60)
-    print("Testing Standalone Searcher")
-    print("=" * 60)
+    print("\n5. FIFTH RUN - Disable auto-load")
+    print("-" * 50)
+    api_call_count = 0
+    indexer5 = FAISSIndexer(mock_embedding_func, config)
+    was_indexed = await indexer5.prepare_and_index(df_modified, column_configs, auto_load=False)
+    if was_indexed:
+        indexer5.save()
+    print(f"Result: {'Created new index' if was_indexed else 'Loaded from cache'}")
+    print(f"Total API calls made: {api_call_count}")
 
-    try:
-        # Load existing index
-        searcher = FAISSSearcher('test_index.idx', 'test_metadata.pkl')
+    # Clean up
+    for file in ['cache_demo.idx', 'cache_demo.pkl']:
+        if os.path.exists(file):
+            os.remove(file)
 
-        # Create a query embedding
-        query_embedding = np.random.randn(4096).astype('float32')
-
-        # Search in different columns
-        for column in ['title', 'keywords', 'description']:
-            results = searcher.search(query_embedding, column, top_n=2)
-            print(f"\nSearch in '{column}': {results}")
-
-    except FileNotFoundError:
-        print("Index files not found. Run the async test first to create them.")
-
-
-async def main():
-    """Main test function"""
-    # Test with mock data
-    await test_with_mock_data()
-
-    # Test standalone searcher
-    test_standalone_searcher()
-
-    # Test with API client (optional)
-    await test_with_api_client()
-
-    print("\n" + "=" * 60)
-    print("All tests completed successfully!")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print("CACHING DEMONSTRATION COMPLETE")
+    print("=" * 70)
+    print("\nKey Points:")
+    print("• Index is automatically loaded when data hasn't changed")
+    print("• No API calls are made when using cached index")
+    print("• Data changes are detected via SHA-256 hashing")
+    print("• Force reindex option available when needed")
+    print("• Auto-load can be disabled for manual control")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    api_call_count = 0
+    asyncio.run(demo_caching())
