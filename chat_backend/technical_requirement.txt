@@ -1,0 +1,260 @@
+Problem statement:
+
+A custom chat streaming 
+
+Only allowed a lib: OpenAI , Mem0, Tinydb, fastapi, async. 
+
+Docs to review:
+https://docs.vllm.ai/en/stable/features/tool_calling.html
+
+https://docs.mem0.ai/core-concepts/memory-types
+
+https://docs.mem0.ai/platform/advanced-memory-operations
+
+https://docs.mem0.ai/open-source/python-quickstart
+
+https://docs.mem0.ai/components/llms/models/vllm
+
+https://docs.mem0.ai/components/vectordbs/dbs/faiss
+
+review this for prompt of reasoning:
+https://github.com/tensorzero/tensorzero/blob/main/examples/rag-retrieval-augmented-generation/simple-agentic-rag/config/functions/multi_hop_rag_agent/baseline/system_template.txt
+
+
+[JUST CONCEPTS: DONT TAKE IT DIRECT FACE VALUE]Some other concepts to review:
+
+
+Short answer: yes—treat “memory” as a tool, not as part of the prompt. Store and retrieve it outside the LLM, then inject only a tiny, task-specific summary (or even just IDs) per turn.
+
+Here’s a compact blueprint that works in practice without blowing the context window.
+
+What to build
+	1.	Two-tier memory
+
+	•	Profile (stable facts/preferences): < 20 items, each ≤ 120 chars. Rarely changes.
+	•	Episodic (session facts/commitments): rolling store with decay (importance × recency × frequency).
+
+	2.	Strict gating before storing
+
+	•	Keep only if it passes: (usefulness in future?) ∧ (not ephemeral?) ∧ (not sensitive?) ∧ (≤ 120 chars).
+	•	Score = 0.6*importance + 0.25*recency + 0.15*frequency; drop below threshold, decay each day.
+
+	3.	Query-time retrieval (not full history)
+
+	•	Extract a sparse query from the latest user turn (entities, intent, time).
+	•	Retrieve top-k memory snippets (k=3–6) by hybrid search: BM25 (fast keywords) + embeddings (semantic) + RRF merge.
+	•	Compress each snippet to ≤ 30–60 tokens (“memory hints”).
+
+	4.	Inject minimal context
+
+	•	Put memory hints in a tiny, fixed section of the system message:
+
+[MEMORY HINTS]
+• user_name: Preetam
+• prefers: concise, code-first
+• last_tool: vLLM 0.10.1.1 (workers issue)
+
+
+	•	Keep this block under 300–400 tokens. Never stream raw chat logs.
+
+	5.	Let the model maintain memory via tools
+
+	•	Add two tool calls the model can use:
+	•	propose_memory(items[]) → returns candidate memories with scores.
+	•	fetch_memory(query, k) → returns compressed hints.
+	•	You approve/deny propose_memory server-side with your gating rules.
+
+	6.	Decay + dedupe
+
+	•	Nightly job: lower scores, merge near-duplicates (cosine > 0.92), drop stale.
+
+	7.	Optional: ultra-low-token “IDs only”
+
+	•	Instead of pasting hints, pass IDs in the system msg and let the model call fetch_memory(ids) on demand. This costs ~10–30 tokens.
+
+Drop-in reference implementation (Python, to the point)
+
+# pip install rapidfuzz rank_bm25 sentence-transformers numpy
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+import numpy as np
+from rapidfuzz import fuzz
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
+
+EMBED = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")  # 384-dim, fast
+
+@dataclass
+class MemoryItem:
+    id: str
+    text: str                      # ≤ 120 chars
+    kind: str                      # "profile" | "episodic"
+    created_at: datetime
+    last_seen_at: datetime
+    importance: float              # 0..1
+    frequency: int = 1
+    score: float = 0.0
+    vec: Optional[np.ndarray] = None
+
+class MemoryStore:
+    def __init__(self):
+        self.mem: Dict[str, MemoryItem] = {}
+        self._bm25_corpus: List[List[str]] = []
+        self._bm25_ids: List[str] = []
+        self._bm25 = None
+
+    # ---------- Storage ----------
+    def gate(self, text: str, kind: str, importance: float) -> bool:
+        if len(text) > 160: return False
+        ephemeral = any(w in text.lower() for w in ["today only", "temp password", "otp", "one-time"])
+        if ephemeral: return False
+        if importance < 0.2: return False
+        return True
+
+    def add_or_update(self, item: MemoryItem):
+        if item.id in self.mem:
+            m = self.mem[item.id]
+            m.last_seen_at = datetime.utcnow()
+            m.frequency += 1
+            m.importance = max(m.importance, item.importance)
+        else:
+            item.vec = EMBED.encode(item.text, normalize_embeddings=True)
+            self.mem[item.id] = item
+            self._bm25_corpus.append(item.text.split())
+            self._bm25_ids.append(item.id)
+            self._bm25 = BM25Okapi(self._bm25_corpus)
+
+    # ---------- Maintenance ----------
+    def rescore(self, now: Optional[datetime]=None):
+        now = now or datetime.utcnow()
+        for m in self.mem.values():
+            days = max(0, (now - m.last_seen_at).days)
+            recency = np.exp(-days/30)          # ~1 month half-life
+            freq = min(1.0, np.log1p(m.frequency)/3)
+            m.score = 0.6*m.importance + 0.25*recency + 0.15*freq
+
+    def gc(self, floor: float=0.25, keep_k_profile: int=20):
+        prof = [m for m in self.mem.values() if m.kind=="profile"]
+        prof.sort(key=lambda x: x.score, reverse=True)
+        for m in prof[keep_k_profile:]:
+            del self.mem[m.id]
+        for m in list(self.mem.values()):
+            if m.kind=="episodic" and m.score < floor:
+                del self.mem[m.id]
+
+    # ---------- Retrieval ----------
+    def retrieve(self, query: str, k: int=5):
+        if not self.mem: return []
+        # BM25
+        bm = self._bm25.get_scores(query.split()) if self._bm25 else np.zeros(len(self._bm25_ids))
+        # Embeddings
+        qv = EMBED.encode(query, normalize_embeddings=True)
+        vec_scores = np.array([float(np.dot(m.vec, qv)) for m in self.mem.values()])
+        ids = list(self.mem.keys())
+        # Normalize & Reciprocal Rank Fusion
+        def rankify(scores):
+            order = np.argsort(-scores)
+            ranks = np.empty_like(order); ranks[order] = np.arange(1, len(scores)+1)
+            return 1.0 / (60 + ranks)  # damping
+        fused = rankify(bm)[:len(ids)] + rankify(vec_scores)
+        top_idx = np.argsort(-fused)[:k]
+        out = [self.mem[ids[i]] for i in top_idx]
+        return out
+
+def compress_hint(text: str, max_chars: int=120) -> str:
+    return text[:max_chars]
+
+# ---- Example usage in your chat loop ----
+store = MemoryStore()
+
+def maybe_store(user_turn: str):
+    # Cheap heuristics for importance; replace with a tiny LLM if you want.
+    important = any(k in user_turn.lower() for k in ["i prefer", "remember", "from now on", "my phone", "diet", "allergic", "job", "deadline"])
+    importance = 0.8 if important else 0.3
+    if store.gate(user_turn, kind="episodic", importance=importance):
+        item = MemoryItem(
+            id=f"m:{hash(user_turn)}",
+            text=user_turn.strip()[:140],
+            kind="episodic",
+            created_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+            importance=importance
+        )
+        store.add_or_update(item)
+
+def memory_hints(latest_user_turn: str, budget_chars: int=350) -> str:
+    store.rescore()
+    store.gc()
+    mems = store.retrieve(latest_user_turn, k=5)
+    hints = []
+    used = 0
+    for m in mems:
+        h = compress_hint(m.text)
+        if used + len(h) + 2 > budget_chars: break
+        hints.append("• " + h)
+        used += len(h) + 2
+    return "[MEMORY HINTS]\n" + "\n".join(hints) if hints else ""
+
+Prompt wiring (minimal tokens)
+	•	System (static, first 1–2 lines max):
+
+You are an assistant. Prefer concise, code-first answers.
+Use MEMORY HINTS only if relevant. Do not restate them.
+
+
+	•	System (per-turn, tiny): insert output of memory_hints(...) (≤ 350 chars).
+	•	Messages: only the last N=4–6 conversational turns + the new user turn.
+	•	Tools: expose propose_memory and fetch_memory to let the model help you curate without adding tokens.
+
+Extra tricks that help
+	•	IDs over text: Pass memory IDs (e.g., mem:42, mem:77) and let the model call a tool to expand only the ones it needs.
+	•	Entity slots: Keep a fixed JSON of 10–15 slots (name, role, timezone, style, allergies, projects…). Each slot is ≤ 60 chars—always in system prompt; everything else is in episodic memory.
+	•	Task-specific profiles: Separate “global profile” from “code-gen profile,” “fitness profile,” etc. Load only the relevant profile by intent classifier (tiny LLM/rules).
+	•	Compression models: If you must inline info, compress with a small model (or LLMLingua-style prompt) to force ≤ X chars.
+
+What not to rely on
+	•	KV-cache reuse across requests (not available in most hosted APIs).
+	•	Dumping long chat history (guaranteed to bloat).
+
+⸻
+
+If you want, tell me your stack (OpenAI/Azure, vLLM local, LangGraph/LangChain, vector DB) and I’ll give you a drop-in middleware for your server with the exact tool schemas and a 1-file memory service.
+
+
+Task:
+
+Need a backend with fastapi async
+
+/chat post endpoint, takes session id(uuid) and user_id (name), reasoning_mode: True or False as optional
+
+
+if reasoning mode , then it should break down the task and plan and take multiple rounds. 
+review this: https://www.ibm.com/think/topics/react-agent
+
+Our goal is to have tool calling feature, efficient yet best memory (focus on this, try to impoelment such that there is session based memory and user based memory, it has to be accurate)
+
+We are using vllm for llm and embeddings, everything is file based . But given its open ai compatible for testing you can use open ai models remember later it should be possible to change to vllm. 
+
+
+
+We maintain seprate tinydb files as following file dir:
+each user have its own folder and inside there each session have its own session.json
+User/session: query and response as sequence in json file. 
+
+, we want streaming feature, 
+
+
+Create few tools to test it
+
+
+
+Make this pipeline as performance as possible. 
+
+
+
+Review docs carefully and need best possible architecture.
+
+
+Create a really great plan and then implement accordingly. 
+

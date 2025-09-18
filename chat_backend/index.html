@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Backend Test Interface</title>
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+        .chat-container {
+            height: 500px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            background-color: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 10px;
+            max-width: 80%;
+        }
+
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .assistant-message {
+            background-color: #ffffff;
+            border: 1px solid #dee2e6;
+            margin-right: auto;
+        }
+
+        .reasoning-step {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+
+        .tool-call {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+
+        .status-indicator {
+            height: 10px;
+            width: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-online { background-color: #28a745; }
+        .status-offline { background-color: #dc3545; }
+
+        .typing-indicator {
+            display: none;
+            padding: 10px;
+            font-style: italic;
+            color: #6c757d;
+        }
+
+        .settings-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid mt-3">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-gear"></i> Settings</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="serverUrl" class="form-label">Server URL</label>
+                            <input type="text" class="form-control" id="serverUrl" value="http://localhost:8000">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="userId" class="form-label">User ID</label>
+                            <input type="text" class="form-control" id="userId" value="test_user">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="sessionId" class="form-label">Session ID</label>
+                            <input type="text" class="form-control" id="sessionId" value="">
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="reasoningMode">
+                                <label class="form-check-label" for="reasoningMode">
+                                    Reasoning Mode
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="temperature" class="form-label">Temperature: <span id="tempValue">0.7</span></label>
+                            <input type="range" class="form-range" id="temperature" min="0" max="1" step="0.1" value="0.7">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="maxTokens" class="form-label">Max Tokens</label>
+                            <input type="number" class="form-control" id="maxTokens" value="1000" min="100" max="4000">
+                        </div>
+
+                        <button class="btn btn-primary w-100" id="newSessionBtn">
+                            <i class="bi bi-plus-circle"></i> New Session
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Status Panel -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h6><i class="bi bi-activity"></i> Status</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <span class="status-indicator status-offline" id="serverStatus"></span>
+                            <small>Server</small>
+                        </div>
+                        <div class="mb-2">
+                            <span class="status-indicator status-offline" id="memoryStatus"></span>
+                            <small>Memory</small>
+                        </div>
+                        <div class="mb-2">
+                            <span class="status-indicator status-offline" id="toolsStatus"></span>
+                            <small>Tools</small>
+                        </div>
+                        <button class="btn btn-sm btn-outline-primary w-100" id="healthCheckBtn">
+                            <i class="bi bi-arrow-clockwise"></i> Check Health
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tools Panel -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h6><i class="bi bi-tools"></i> Available Tools</h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="toolsList">
+                            <small class="text-muted">Click "Check Health" to load tools</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Chat Area -->
+            <div class="col-md-9">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="bi bi-chat-dots"></i> Chat Interface</h5>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary" id="clearChatBtn">
+                                <i class="bi bi-trash"></i> Clear
+                            </button>
+                            <button class="btn btn-sm btn-outline-info" id="exportChatBtn">
+                                <i class="bi bi-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="chat-container" id="chatContainer">
+                            <div class="text-center text-muted p-4">
+                                <i class="bi bi-chat-square-dots display-4"></i>
+                                <p class="mt-2">Welcome! Start a conversation to test the chat backend.</p>
+                                <p><small>Try asking about calculations, file searches, or complex reasoning tasks.</small></p>
+                            </div>
+                        </div>
+                        <div class="typing-indicator" id="typingIndicator">
+                            <i class="bi bi-three-dots"></i> Assistant is typing...
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="messageInput"
+                                   placeholder="Type your message here..."
+                                   onkeypress="handleKeyPress(event)">
+                            <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">
+                                <i class="bi bi-send"></i> Send
+                            </button>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                Try: "Calculate 15 * 23", "What's the current time?", "Remember that I like coffee"
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- jQuery and Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Generate a random session ID on page load
+        $(document).ready(function() {
+            generateNewSession();
+            checkHealth();
+
+            // Update temperature display
+            $('#temperature').on('input', function() {
+                $('#tempValue').text($(this).val());
+            });
+        });
+
+        function generateNewSession() {
+            const sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+            $('#sessionId').val(sessionId);
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        async function checkHealth() {
+            const serverUrl = $('#serverUrl').val();
+
+            try {
+                const response = await fetch(`${serverUrl}/health`);
+                const data = await response.json();
+
+                // Update server status
+                $('#serverStatus').removeClass('status-offline').addClass('status-online');
+
+                // Update component statuses
+                if (data.components) {
+                    $('#memoryStatus').removeClass('status-offline status-online')
+                        .addClass(data.components.memory_manager === 'online' ? 'status-online' : 'status-offline');
+                    $('#toolsStatus').removeClass('status-offline status-online')
+                        .addClass(data.components.tool_registry === 'online' ? 'status-online' : 'status-offline');
+                }
+
+                // Load tools
+                await loadTools();
+
+            } catch (error) {
+                console.error('Health check failed:', error);
+                $('#serverStatus, #memoryStatus, #toolsStatus').removeClass('status-online').addClass('status-offline');
+            }
+        }
+
+        async function loadTools() {
+            const serverUrl = $('#serverUrl').val();
+
+            try {
+                const response = await fetch(`${serverUrl}/tools`);
+                const data = await response.json();
+
+                const toolsList = $('#toolsList');
+                toolsList.empty();
+
+                if (data.tools && data.tools.length > 0) {
+                    data.tools.forEach(tool => {
+                        toolsList.append(`
+                            <div class="mb-2">
+                                <strong>${tool.function.name}</strong>
+                                <br><small class="text-muted">${tool.function.description}</small>
+                            </div>
+                        `);
+                    });
+                } else {
+                    toolsList.html('<small class="text-muted">No tools available</small>');
+                }
+
+            } catch (error) {
+                console.error('Failed to load tools:', error);
+                $('#toolsList').html('<small class="text-danger">Failed to load tools</small>');
+            }
+        }
+
+        async function sendMessage() {
+            const message = $('#messageInput').val().trim();
+            if (!message) return;
+
+            const serverUrl = $('#serverUrl').val();
+            const userId = $('#userId').val();
+            const sessionId = $('#sessionId').val();
+            const reasoningMode = $('#reasoningMode').is(':checked');
+            const temperature = parseFloat($('#temperature').val());
+            const maxTokens = parseInt($('#maxTokens').val());
+
+            // Add user message to chat
+            addMessage('user', message);
+            $('#messageInput').val('');
+
+            // Show typing indicator
+            $('#typingIndicator').show();
+            $('#sendBtn').prop('disabled', true);
+
+            try {
+                const payload = {
+                    session_id: sessionId,
+                    user_id: userId,
+                    message: message,
+                    reasoning_mode: reasoningMode,
+                    temperature: temperature,
+                    max_tokens: maxTokens
+                };
+
+                const response = await fetch(`${serverUrl}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                // Handle streaming response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantMessage = '';
+                let messageElement = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+
+                                if (data.type === 'content') {
+                                    assistantMessage += data.content;
+
+                                    if (!messageElement) {
+                                        messageElement = addMessage('assistant', assistantMessage);
+                                    } else {
+                                        updateMessage(messageElement, assistantMessage);
+                                    }
+                                } else if (data.type === 'thinking') {
+                                    if (!messageElement) {
+                                        messageElement = addMessage('assistant', '');
+                                    }
+                                    addReasoningStep(messageElement, 'Thinking', data.content);
+                                } else if (data.type === 'tool_call') {
+                                    if (!messageElement) {
+                                        messageElement = addMessage('assistant', '');
+                                    }
+                                    addToolCall(messageElement, data.tool_name, data.tool_input);
+                                } else if (data.type === 'tool_result') {
+                                    if (messageElement) {
+                                        addToolResult(messageElement, data.result);
+                                    }
+                                } else if (data.type === 'final_response') {
+                                    assistantMessage = data.response;
+                                    if (!messageElement) {
+                                        messageElement = addMessage('assistant', assistantMessage);
+                                    } else {
+                                        updateMessage(messageElement, assistantMessage);
+                                    }
+                                } else if (data.type === 'error') {
+                                    addMessage('assistant', `Error: ${data.error}`, 'error');
+                                }
+                            } catch (e) {
+                                console.error('Error parsing SSE data:', e);
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                addMessage('assistant', `Error: ${error.message}`, 'error');
+            } finally {
+                $('#typingIndicator').hide();
+                $('#sendBtn').prop('disabled', false);
+                $('#messageInput').focus();
+            }
+        }
+
+        function addMessage(role, content, type = 'normal') {
+            const chatContainer = $('#chatContainer');
+            const messageClass = role === 'user' ? 'user-message' : 'assistant-message';
+            const errorClass = type === 'error' ? 'border-danger text-danger' : '';
+
+            const messageElement = $(`
+                <div class="message ${messageClass} ${errorClass}">
+                    <div class="message-content">${escapeHtml(content)}</div>
+                    <div class="message-meta"></div>
+                </div>
+            `);
+
+            chatContainer.append(messageElement);
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+
+            return messageElement;
+        }
+
+        function updateMessage(messageElement, content) {
+            messageElement.find('.message-content').html(escapeHtml(content));
+            const chatContainer = $('#chatContainer');
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+        }
+
+        function addReasoningStep(messageElement, stepType, content) {
+            const metaDiv = messageElement.find('.message-meta');
+            const stepElement = $(`
+                <div class="reasoning-step">
+                    <strong>${stepType}:</strong> ${escapeHtml(content)}
+                </div>
+            `);
+            metaDiv.append(stepElement);
+
+            const chatContainer = $('#chatContainer');
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+        }
+
+        function addToolCall(messageElement, toolName, toolInput) {
+            const metaDiv = messageElement.find('.message-meta');
+            const toolElement = $(`
+                <div class="tool-call">
+                    <strong>🔧 ${toolName}:</strong> ${escapeHtml(JSON.stringify(toolInput, null, 2))}
+                </div>
+            `);
+            metaDiv.append(toolElement);
+
+            const chatContainer = $('#chatContainer');
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+        }
+
+        function addToolResult(messageElement, result) {
+            const lastToolCall = messageElement.find('.tool-call').last();
+            if (lastToolCall.length) {
+                lastToolCall.append(`<br><strong>Result:</strong> ${escapeHtml(JSON.stringify(result, null, 2))}`);
+            }
+
+            const chatContainer = $('#chatContainer');
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML.replace(/\n/g, '<br>');
+        }
+
+        function clearChat() {
+            $('#chatContainer').html(`
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-chat-square-dots display-4"></i>
+                    <p class="mt-2">Chat cleared. Start a new conversation!</p>
+                </div>
+            `);
+        }
+
+        function exportChat() {
+            const messages = [];
+            $('#chatContainer .message').each(function() {
+                const role = $(this).hasClass('user-message') ? 'user' : 'assistant';
+                const content = $(this).find('.message-content').text();
+                messages.push({ role, content });
+            });
+
+            const exportData = {
+                session_id: $('#sessionId').val(),
+                user_id: $('#userId').val(),
+                timestamp: new Date().toISOString(),
+                messages: messages
+            };
+
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `chat_export_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Event handlers
+        $('#newSessionBtn').click(generateNewSession);
+        $('#healthCheckBtn').click(checkHealth);
+        $('#clearChatBtn').click(clearChat);
+        $('#exportChatBtn').click(exportChat);
+    </script>
+</body>
+</html>
