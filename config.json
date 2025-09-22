@@ -1,107 +1,58 @@
-{
-  "model": {
-    "name": "gpt-4o-mini",
-    "temperature": 0.0
-  },
-  "agent": {
-    "verbose": true,
-    "max_iterations": 15,
-    "max_retries": 3,
-    "memory_window": 10
-  },
-  "data": {
-    "csv_path": "external_loss_mock_data.csv",
-    "description": "UBS Operational Loss Data containing risk events, financial impacts, and AI-generated insights"
-  },
-  "ubs_colors": {
-    "ubs-black": "#000000",
-    "ubs-red": "#e60000",
-    "ubs-white": "#ffffff",
-    "ubs-red-web": "#da0000",
-    "ubs-bordeaux1": "#bd000c",
-    "ubs-bordeaux50": "#b03974",
-    "ubs-sand": "#cfbd9b",
-    "ubs-caramel": "#cfbd9b",
-    "ubs-ginger": "#e05bd0",
-    "ubs-chocolate": "#4d3c2f",
-    "ubs-clay": "#7b6b59",
-    "ubs-mouse": "#beb29e",
-    "ubs-curry": "#e5b01c",
-    "ubs-amber-web": "#f2c551",
-    "ubs-warm5": "#5b5e5d",
-    "ubs-honey": "#edc860",
-    "ubs-straw": "#f2d88e",
-    "ubs-chestnut-web": "#ba0000",
-    "ubs-chestnut": "#a43725",
-    "ubs-terracotta": "#c07156",
-    "ubs-cinnamon": "#e6b64d"
-  },
-  "data_fields": {
-    "reference_id_code": "Unique identifier for each operational loss event",
-    "parent_name": "Name of the parent company or entity associated with the event",
-    "ama_peer_bank": "Associated peer bank or financial institution",
-    "description_of_event": "Detailed description of the operational loss event",
-    "nfr_taxonomy": "Non-Financial Risk taxonomy classification",
-    "loss_amount___m_": "Financial loss amount in millions of currency units",
-    "basel_business_line__level1_": "Primary Basel III business line classification",
-    "basel_business_line__level_2": "Secondary Basel III business line classification",
-    "business_unit": "Specific business unit where the event occurred",
-    "ubs_business_division": "UBS business division affected by the event",
-    "event_risk_category": "Primary risk category classification",
-    "sub_risk_category": "More specific sub-category of risk",
-    "activity": "Specific business activity during which the event occurred",
-    "country_of_incident": "Country where the operational loss event took place",
-    "event_region": "Geographic region classification (e.g., EMEA, Americas, APAC)",
-    "month__year_of_settlement": "Settlement date in MM/YYYY format",
-    "multiple_firms_impacted_code": "Binary indicator (Y/N) if multiple firms were impacted",
-    "single_event_multiple_loss_code": "Binary indicator (Y/N) if single event caused multiple losses",
-    "date_of_entry": "Date when the record was entered into the system",
-    "nfr_taxonomy_number": "Numerical code for Non-Financial Risk taxonomy",
-    "root_cause": "Identified root cause of the operational loss event",
-    "learning_outcome": "Key lessons learned from the incident",
-    "impact": "Assessment of the overall impact (operational, reputational, financial)",
-    "summary": "Executive summary of the event and its consequences",
-    "ai_nfr_cluster": "AI-generated cluster classification for NFR categorization",
-    "ai_nfr_taxonomy": "AI-generated taxonomy classification",
-    "ai_risk_theme": "AI-identified primary risk theme",
-    "ai_reasoning_taxonomy_steps": "AI's step-by-step reasoning for taxonomy classification",
-    "ai_reasoning_risk_theme": "AI's reasoning for risk theme identification"
-  },
-  "data_preprocessing": {
-    "datetime_columns": {
-      "month__year_of_settlement": {
-        "format": "%m/%Y",
-        "create_components": true
-      },
-      "date_of_entry": {
-        "format": "%Y-%m-%d",
-        "create_components": false
-      }
+# pip install mem0 langchain langchain-openai faiss-cpu kuzu-python
+
+import os
+from mem0 import Memory
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings  # swap to your LC providers if needed
+
+# --- ENV (example: OpenAI via LangChain) ---
+os.environ["OPENAI_API_KEY"] = "sk-..."  # or set your provider-specific envs
+
+# --- LangChain models (use *any* LC chat/embedding class you prefer) ---
+lc_chat = ChatOpenAI(model="gpt-4o", temperature=0.2, max_tokens=2000)
+lc_embed = OpenAIEmbeddings(model="text-embedding-3-small", dimensions=1536)
+
+# --- Mem0 config: LangChain LLM + LangChain Embeddings + FAISS + Kùzu Graph Store ---
+config = {
+    "llm": {
+        "provider": "langchain",
+        "config": {
+            "model": lc_chat
+        }
+    },
+    "embedder": {
+        "provider": "langchain",
+        "config": {
+            "model": lc_embed
+        }
+    },
+    "vector_store": {
+        "provider": "faiss",
+        "config": {
+            "collection_name": "mem0_demo",
+            "path": "/tmp/faiss_memories",       # persisted FAISS index dir
+            "distance_strategy": "cosine"        # or "euclidean", "inner_product"
+            # "normalize_L2": True                # optional for euclidean usage
+        }
+    },
+    "graph_store": {
+        "provider": "kuzu",
+        "config": {
+            "db": "mem0_graph.kuzu"              # on-disk; use ":memory:" for in-memory ephemeral
+        }
+        # Optional: override graph-only LLM (else the main llm is used)
+        # "llm": {
+        #     "provider": "langchain",
+        #     "config": { "model": lc_chat }
+        # }
     }
-  },
-  "context": {
-    "general_instructions": "You are an expert data analyst specializing in operational risk and financial loss analysis for UBS. You have deep knowledge of Basel III frameworks, risk management, and regulatory requirements. When creating visualizations, always use the UBS color palette provided. Focus on providing actionable insights, identifying trends, and helping users understand risk patterns in the operational loss data.",
-    "specific_instructions": [
-      "VISUALIZATION GUIDELINES:\n- Always use UBS brand colors from the provided palette\n- Primary colors (ubs-red, ubs-black) for main elements\n- Secondary colors for accents and supporting elements\n- Ensure charts are professional and align with UBS branding\n- Include proper titles, labels, and legends\n- Set figure size to (12, 8) for optimal display\n- Use high DPI (150) for crisp images",
-      "PLOT SAVING REQUIREMENTS:\n- NEVER use plt.show() - plots will not display in web interface\n- ALWAYS save plots using plt.savefig() with session-specific filenames\n- ALWAYS close plots after saving using plt.close()\n- Include the [PLOT_SAVED: filename] marker in your response\n- Use bbox_inches='tight' and dpi=150 for best quality",
-      "DATA ANALYSIS BEST PRACTICES:\n- When analyzing loss amounts, consider both absolute values and relative impacts\n- Look for patterns across time periods, business lines, and geographic regions\n- Pay attention to risk categorizations and root causes\n- Consider regulatory implications of findings\n- Highlight significant outliers or anomalies",
-      "DATETIME HANDLING:\n- The 'month__year_of_settlement' column is preprocessed to datetime format\n- Use 'settlement_year' and 'settlement_month' derived columns for time-based analysis\n- When filtering by date ranges, use pandas datetime comparison methods\n- For time series analysis, ensure proper chronological ordering",
-      "ERROR HANDLING PROTOCOLS:\n- Always check data types before mathematical operations\n- Use .reset_index() after groupby operations to avoid index issues\n- Handle missing values appropriately (NaN, null, empty strings)\n- Verify column names exist before accessing them\n- Use try-catch blocks for complex operations",
-      "RISK ANALYSIS FOCUS AREAS:\n- Identify high-impact, low-frequency events\n- Analyze correlation between business lines and risk types\n- Examine geographic distribution of operational losses\n- Track trends in AI-generated risk classifications\n- Compare traditional vs AI-driven risk categorizations"
-    ]
-  },
-  "chart_settings": {
-    "default_figure_size": [12, 8],
-    "default_dpi": 150,
-    "font_family": "Arial",
-    "title_font_size": 16,
-    "label_font_size": 12,
-    "legend_font_size": 10
-  },
-  "api_settings": {
-    "session_timeout_hours": 24,
-    "max_concurrent_sessions": 100,
-    "enable_plotting": true,
-    "enable_file_export": true
-  }
 }
+
+# --- Use it ---
+m = Memory.from_config(config)
+
+# Example add/search
+messages = [
+    {"role": "user", "content": "I live in Kraków and prefer sci-fi movies."}
+]
+m.add(messages, user_id="alice", metadata={"domain": "prefs"})
+print(m.search("movie genre preference?", user_id="alice"))
