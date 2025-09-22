@@ -1,44 +1,24 @@
-#!/bin/bash
-TOKEN=$(az account get-access-token \
-  --resource https://cognitiveservices.azure.com/ \
-  --query accessToken -o tsv)
+# Detect your Ubuntu repo name (ubuntu2204 or ubuntu2404)
+distribution=$(. /etc/os-release; echo ${ID}${VERSION_ID} | tr -d .)
 
-export OPENAI_API_TYPE=azure
-export OPENAI_API_BASE="https://<your-resource-name>.openai.azure.com/"
-export OPENAI_API_VERSION="2024-08-01-preview"
-export OPENAI_API_KEY="Bearer $TOKEN"
+# Add NVIDIA CUDA repo + key
+wget https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
 
-codex "$@"
+# Install Toolkit only (keeps your existing driver)
+sudo apt install -y cuda-toolkit   # or a specific major: sudo apt install -y cuda-toolkit-13
 
+# (Optional) If you also want NVIDIA driver via CUDA meta-pkg:
+# sudo apt install -y cuda          # installs driver + toolkit
 
-# pip install openai azure-identity
-from openai import AzureOpenAI
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+# Set CUDA_HOME and PATH/LD_LIBRARY_PATH (persistent)
+echo 'export CUDA_HOME=/usr/local/cuda'          >> ~/.bashrc
+echo 'export PATH=$CUDA_HOME/bin:$PATH'          >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=$CUDA_HOME/lib64:${LD_LIBRARY_PATH}' >> ~/.bashrc
+source ~/.bashrc
 
-# Option A: AAD token (no API key)
-token_provider = get_bearer_token_provider(
-    DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default",
-)
-
-client = AzureOpenAI(
-    azure_endpoint="https://<your-resource>.openai.azure.com/",
-    api_version="2024-08-01-preview",
-    azure_ad_token_provider=token_provider,
-)
-
-# If you have an API key instead, use: client = AzureOpenAI(
-#   azure_endpoint="https://<your-resource>.openai.azure.com/",
-#   api_key="<AZURE_OPENAI_API_KEY>",
-#   api_version="2024-08-01-preview"
-# )
-
-models = client.models.list()
-for m in models.data:
-    # m.id == deployment name you pass as `model`
-    print({
-        "deployment_name": m.id,
-        "created": m.created,
-        "owned_by": m.owned_by,
-        "object": m.object,
-    })
+# Verify
+nvcc --version
+nvidia-smi | head -n 3
+echo $CUDA_HOME
