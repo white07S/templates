@@ -40,9 +40,22 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("Shutting down...")
+    print("\n🛑 Shutting down gracefully...")
+
+    # Close FAISS vector stores cleanly
+    try:
+        from embeddings import VectorMemoryStore
+        vector_store = VectorMemoryStore()
+        if hasattr(vector_store.vector_store, 'cleanup'):
+            vector_store.vector_store.cleanup()
+    except Exception as e:
+        print(f"Warning: Could not cleanup FAISS: {e}")
+
+    # Close database connections
     conversation_store.close()
     memory_store.close()
+
+    print("✅ Shutdown complete")
 
 # Create FastAPI app
 app = FastAPI(

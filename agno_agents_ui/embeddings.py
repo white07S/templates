@@ -105,26 +105,76 @@ class FAISSVectorStore:
 
     def _setup_auto_save(self):
         """Setup automatic saving timer."""
-        def auto_save():
-            if self._dirty and time.time() - self._last_save > self._save_interval:
-                self.save()
-            # Schedule next auto-save
-            Timer(self._save_interval, auto_save).start()
+        self._auto_save_timer = None
+        self._shutdown = False
 
-        Timer(self._save_interval, auto_save).start()
+        def auto_save():
+            if self._shutdown:
+                return
+
+            if self._dirty and time.time() - self._last_save > self._save_interval:
+                try:
+                    self.save()
+                except Exception as e:
+                    print(f"Auto-save error: {e}")
+
+            # Schedule next auto-save only if not shutting down
+            if not self._shutdown:
+                self._auto_save_timer = Timer(self._save_interval, auto_save)
+                self._auto_save_timer.daemon = True  # Make timer daemon so it doesn't block shutdown
+                self._auto_save_timer.start()
+
+        # Start first timer
+        self._auto_save_timer = Timer(self._save_interval, auto_save)
+        self._auto_save_timer.daemon = True
+        self._auto_save_timer.start()
 
     def _setup_cleanup_handlers(self):
         """Setup cleanup handlers for safe shutdown."""
-        def cleanup_handler(signum=None, frame=None):
-            self.force_save()
+        self._original_sigint = None
+        self._cleanup_done = False
 
-        # Register cleanup for various exit scenarios
-        atexit.register(cleanup_handler)
-        signal.signal(signal.SIGINT, cleanup_handler)
+        def cleanup_handler(signum=None, frame=None):
+            # Prevent multiple cleanup calls
+            if self._cleanup_done:
+                return
+
+            self._cleanup_done = True
+            self._shutdown = True
+
+            print("\n🔄 FAISS cleanup: Saving index before shutdown...")
+
+            # Cancel auto-save timer
+            if hasattr(self, '_auto_save_timer') and self._auto_save_timer:
+                self._auto_save_timer.cancel()
+
+            # Save any pending data
+            try:
+                self.force_save()
+                print("✅ FAISS index saved successfully")
+            except Exception as e:
+                print(f"❌ Error saving FAISS index: {e}")
+
+            # If signal handler, restore original and re-raise
+            if signum is not None and self._original_sigint:
+                signal.signal(signal.SIGINT, self._original_sigint)
+                # Re-raise the signal to allow normal shutdown
+                import os
+                os.kill(os.getpid(), signum)
+
+        # Register cleanup for exit
+        atexit.register(lambda: cleanup_handler())
+
+        # Save original handlers and install new ones
+        self._original_sigint = signal.signal(signal.SIGINT, cleanup_handler)
         signal.signal(signal.SIGTERM, cleanup_handler)
 
     def save(self):
         """Save index and metadata to disk."""
+        if hasattr(self, '_shutdown') and self._shutdown:
+            # Don't save during shutdown, let force_save handle it
+            return
+
         try:
             # Process any pending batches first
             if self._pending_vectors:
@@ -142,9 +192,25 @@ class FAISSVectorStore:
             print(f"❌ Error saving index: {e}")
 
     def force_save(self):
-        """Force immediate save of all pending data."""
-        print("🔄 Force saving FAISS index...")
-        self.save()
+        """Force immediate save of all pending data without triggering auto-save."""
+        try:
+            # Process any pending batches first
+            if self._pending_vectors:
+                print(f"  Processing {len(self._pending_vectors)} pending vectors...")
+                self._process_pending_batch()
+
+            # Save index and metadata directly
+            if self.index.ntotal > 0:
+                faiss.write_index(self.index, str(self.index_path))
+                with open(self.metadata_path, 'wb') as f:
+                    pickle.dump(self.metadata, f)
+                print(f"  Saved {self.index.ntotal} vectors to disk")
+
+            self._last_save = time.time()
+            self._dirty = False
+
+        except Exception as e:
+            print(f"  Warning: Could not save FAISS index: {e}")
 
     def add_vector(
         self,
@@ -326,6 +392,23 @@ class FAISSVectorStore:
             "last_save": self._last_save,
             "dirty": self._dirty
         }
+
+    def cleanup(self):
+        """Clean shutdown of FAISS vector store."""
+        print("🔄 Cleaning up FAISS vector store...")
+
+        # Set shutdown flag
+        self._shutdown = True
+
+        # Cancel auto-save timer
+        if hasattr(self, '_auto_save_timer') and self._auto_save_timer:
+            self._auto_save_timer.cancel()
+
+        # Force save any pending data
+        if self._dirty or self._pending_vectors:
+            self.force_save()
+
+        print("✅ FAISS cleanup completed")
 
 class VectorMemoryStore:
     """High-level interface for vector-based memory storage."""
