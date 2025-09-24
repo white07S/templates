@@ -1,919 +1,223 @@
-"""
-Advanced Chat Streaming Backend with Memory Management
-Features: Session/User memory, Tool calling, ReAct reasoning, Token optimization
-"""
-
+# sp_page_reconstruct.py
 import os
 import json
-import asyncio
-import uuid
-from datetime import datetime
-from typing import Optional, List, Dict, Any, AsyncIterator, Tuple
-from enum import Enum
-from pathlib import Path
-import hashlib
-import re
-import traceback
-import logging
+import html
+import requests
+from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
-from tinydb import TinyDB, Query
-from openai import AsyncOpenAI
-from mem0 import MemoryClient, Memory
-import numpy as np
-from collections import deque
+# ---------------------------
+# Config (env vars preferred)
+# ---------------------------
+TENANT_ID = os.getenv("AZURE_TENANT_ID", "<tenant-guid-or-domain>")
+CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "<app-id>")
+CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")  # for app-only
+USE_DEVICE_CODE = os.getenv("USE_DEVICE_CODE", "0") == "1"  # set 1 to use user sign-in
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Graph resource + scopes
+GRAPH_SCOPE_DEFAULTS = ["https://graph.microsoft.com/.default"]  # for app-only
+GRAPH_SCOPES_DELEGATED = ["Sites.Read.All", "Pages.Read.All", "offline_access", "openid", "profile"]
 
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+SP_REST_BASE_FMT = "https://{host}/_api"  # used only for CanvasContent1 fallback
 
-# ==================== Configuration ====================
+# ---------------------------
+# Auth (MSAL)
+# ---------------------------
+def get_access_token() -> str:
+    import msal
 
-class Config:
-    """Application configuration with environment variables"""
-    # Directories
-    DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
-    USER_DIR = DATA_DIR / "users"
-    
-    # Token budgets (configurable)
-    TOKEN_BUDGET_SYSTEM = int(os.getenv("TOKEN_BUDGET_SYSTEM", "2000"))
-    TOKEN_BUDGET_MEMORY = int(os.getenv("TOKEN_BUDGET_MEMORY", "3000"))
-    TOKEN_BUDGET_CONVERSATION = int(os.getenv("TOKEN_BUDGET_CONVERSATION", "8000"))
-    
-    # ReAct configuration
-    MAX_REASONING_STEPS = int(os.getenv("MAX_REASONING_STEPS", "10"))
-    REASONING_TIMEOUT = int(os.getenv("REASONING_TIMEOUT", "60"))
-    
-    # Memory configuration
-    MEMORY_RELEVANCE_THRESHOLD = float(os.getenv("MEMORY_RELEVANCE_THRESHOLD", "0.7"))
-    COMPRESSION_RATIO = float(os.getenv("COMPRESSION_RATIO", "0.3"))
-    MEMORY_CACHE_SIZE = int(os.getenv("MEMORY_CACHE_SIZE", "100"))
-    
-    # LLM Configuration
-    USE_OPENAI = os.getenv("USE_OPENAI", "true").lower() == "true"
-    
-    # OpenAI settings
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    
-    # vLLM settings
-    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
-    LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy-key")
-    LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct")
-    
-    # Mem0 configuration
-    MEM0_API_KEY = os.getenv("MEM0_API_KEY")
-    USE_MEM0_CLOUD = bool(MEM0_API_KEY)
-    
-    # API settings
-    DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
-    DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
-    STREAM_CHUNK_DELAY = float(os.getenv("STREAM_CHUNK_DELAY", "0.01"))
-    
-    # Logging
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    authority = f"https://login.microsoftonline.com/{TENANT_ID}"
 
-
-# ==================== Data Models ====================
-
-class MemoryType(str, Enum):
-    """Types of memory storage"""
-    EPISODIC = "episodic"
-    SEMANTIC = "semantic"
-    PROCEDURAL = "procedural"
-    PREFERENCE = "preference"
-
-
-class ReasoningMode(str, Enum):
-    """Reasoning strategies"""
-    DIRECT = "direct"
-    REACT = "react"
-    PLAN_EXECUTE = "plan_execute"
-
-
-class ChatRequest(BaseModel):
-    """Chat endpoint request model"""
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str = Field(..., min_length=1)
-    message: str = Field(..., min_length=1)
-    reasoning_mode: bool = False
-    temperature: float = Field(default=Config.DEFAULT_TEMPERATURE, ge=0, le=2)
-    max_tokens: Optional[int] = Field(default=Config.DEFAULT_MAX_TOKENS)
-    
-    @validator("session_id")
-    def validate_session_id(cls, v):
-        try:
-            uuid.UUID(v)
-            return v
-        except ValueError:
-            return str(uuid.uuid4())
-
-
-class Message(BaseModel):
-    """Message in conversation"""
-    role: str
-    content: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class Memory(BaseModel):
-    """Memory item structure"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    type: MemoryType
-    content: str
-    embedding: Optional[List[float]] = None
-    relevance_score: float = 0.0
-    access_count: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_accessed: Optional[datetime] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-# ==================== Memory Management ====================
-
-class MemoryManager:
-    """Advanced memory management with compression and optimization"""
-    
-    def __init__(self, config: Config):
-        self.config = config
-        self.config.USER_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize Mem0
-        try:
-            if config.USE_MEM0_CLOUD and config.MEM0_API_KEY:
-                self.mem0_client = MemoryClient(api_key=config.MEM0_API_KEY)
-            else:
-                self.mem0_client = Memory()
-        except Exception as e:
-            logger.warning(f"Failed to initialize Mem0: {e}. Using local storage only.")
-            self.mem0_client = None
-        
-        # Memory buffers for optimization
-        self.memory_cache = {}
-        self.compression_buffer = deque(maxlen=config.MEMORY_CACHE_SIZE)
-    
-    def get_session_db(self, user_id: str, session_id: str) -> TinyDB:
-        """Get or create session database"""
-        user_dir = self.config.USER_DIR / user_id
-        user_dir.mkdir(exist_ok=True)
-        session_file = user_dir / f"{session_id}.json"
-        return TinyDB(session_file)
-    
-    async def add_memory(self, 
-                        messages: List[Dict[str, str]], 
-                        user_id: str,
-                        session_id: Optional[str] = None,
-                        memory_type: MemoryType = MemoryType.EPISODIC) -> Dict:
-        """Add memory with intelligent categorization"""
-        
-        metadata = {
-            "type": memory_type.value,
-            "timestamp": datetime.utcnow().isoformat(),
-            "session_id": session_id
-        }
-        
-        result = {"status": "stored_locally"}
-        
-        # Store in Mem0 if available
-        if self.mem0_client:
-            try:
-                if session_id:
-                    result = self.mem0_client.add(
-                        messages, 
-                        user_id=user_id,
-                        run_id=session_id,
-                        metadata=metadata
-                    )
-                else:
-                    result = self.mem0_client.add(
-                        messages,
-                        user_id=user_id,
-                        metadata=metadata
-                    )
-            except Exception as e:
-                logger.error(f"Failed to store in Mem0: {e}")
-        
-        # Always store locally in TinyDB
-        if session_id:
-            try:
-                db = self.get_session_db(user_id, session_id)
-                db.insert({
-                    "messages": messages,
-                    "metadata": metadata,
-                    "mem0_result": result
-                })
-            except Exception as e:
-                logger.error(f"Failed to store in TinyDB: {e}")
-        
-        # Update compression buffer
-        self.compression_buffer.append({
-            "user_id": user_id,
-            "session_id": session_id,
-            "messages": messages,
-            "timestamp": datetime.utcnow()
-        })
-        
-        return result
-    
-    async def search_memories(self,
-                            query: str,
-                            user_id: str,
-                            session_id: Optional[str] = None,
-                            limit: int = 5,
-                            memory_types: Optional[List[MemoryType]] = None) -> List[Dict]:
-        """Search memories with relevance scoring and compression"""
-        
-        results = []
-        
-        # Search in Mem0 if available
-        if self.mem0_client:
-            try:
-                mem0_results = self.mem0_client.search(
-                    query=query,
-                    user_id=user_id,
-                    limit=limit * 2
-                )
-                results = mem0_results.get("results", [])
-            except Exception as e:
-                logger.error(f"Mem0 search failed: {e}")
-        
-        # Filter by memory type
-        if memory_types and results:
-            type_values = [mt.value for mt in memory_types]
-            results = [
-                r for r in results
-                if r.get("metadata", {}).get("type") in type_values
-            ]
-        
-        # Score and rank results
-        scored_results = []
-        for result in results[:limit]:
-            recency_score = self._calculate_recency_score(result)
-            similarity_score = result.get("score", 0.5)
-            combined_score = 0.7 * similarity_score + 0.3 * recency_score
-            
-            if combined_score >= self.config.MEMORY_RELEVANCE_THRESHOLD:
-                result["relevance_score"] = combined_score
-                scored_results.append(result)
-        
-        # Compress if needed
-        return await self._compress_memories(scored_results)
-    
-    async def get_conversation_history(self,
-                                      user_id: str,
-                                      session_id: str,
-                                      max_tokens: int = None) -> List[Message]:
-        """Get conversation history with token budget management"""
-        if max_tokens is None:
-            max_tokens = self.config.TOKEN_BUDGET_CONVERSATION
-            
-        try:
-            db = self.get_session_db(user_id, session_id)
-            all_records = db.all()
-        except Exception as e:
-            logger.error(f"Failed to get conversation history: {e}")
-            return []
-        
-        messages = []
-        token_count = 0
-        
-        # Get recent messages within token budget
-        for record in reversed(all_records):
-            msg_list = record.get("messages", [])
-            for msg in msg_list:
-                # Estimate tokens
-                estimated_tokens = len(msg.get("content", "")) // 4
-                
-                if token_count + estimated_tokens > max_tokens:
-                    if messages and len(messages) > 2:
-                        messages = await self._compress_conversation(messages)
-                    break
-                
-                messages.append(Message(**msg))
-                token_count += estimated_tokens
-        
-        return list(reversed(messages))
-    
-    async def _compress_memories(self, memories: List[Dict]) -> List[Dict]:
-        """Compress memories to fit token budget"""
-        if not memories:
-            return memories
-        
-        total_length = sum(len(m.get("memory", "")) for m in memories)
-        
-        if total_length < self.config.TOKEN_BUDGET_MEMORY:
-            return memories
-        
-        compressed = []
-        for memory in memories:
-            content = memory.get("memory", "")
-            
-            # Extract key phrases
-            key_phrases = self._extract_key_phrases(content)
-            
-            if len(key_phrases) < len(content) * self.config.COMPRESSION_RATIO:
-                memory["memory"] = key_phrases
-                memory["compressed"] = True
-            
-            compressed.append(memory)
-        
-        return compressed
-    
-    async def _compress_conversation(self, messages: List[Message]) -> List[Message]:
-        """Compress conversation history using summarization"""
-        if len(messages) <= 3:
-            return messages
-        
-        first = messages[0]
-        last = messages[-1]
-        middle = messages[1:-1]
-        
-        summary_content = "Previous conversation: "
-        for msg in middle:
-            summary_content += f"{msg.role}: {msg.content[:50]}... "
-        
-        summary_message = Message(
-            role="system",
-            content=f"[Compressed history] {summary_content[:200]}",
-            metadata={"compressed": True}
+    if USE_DEVICE_CODE:
+        # Delegated flow (user sign-in) – requires app to have delegated permissions granted
+        app = msal.PublicClientApplication(CLIENT_ID, authority=authority)
+        flow = app.initiate_device_flow(scopes=[f"{s}" for s in GRAPH_SCOPES_DELEGATED])
+        if "user_code" not in flow:
+            raise RuntimeError(f"Failed to create device flow: {flow}")
+        print(f"To sign in, visit {flow['verification_uri']} and enter code: {flow['user_code']}")
+        result = app.acquire_token_by_device_flow(flow)
+    else:
+        # App-only (client credentials) – requires application permissions + admin consent
+        if not CLIENT_SECRET:
+            raise RuntimeError("CLIENT_SECRET missing for app-only auth.")
+        app = msal.ConfidentialClientApplication(
+            CLIENT_ID, authority=authority, client_credential=CLIENT_SECRET
         )
-        
-        return [first, summary_message, last]
-    
-    def _calculate_recency_score(self, memory: Dict) -> float:
-        """Calculate recency score for memory ranking"""
-        timestamp_str = memory.get("metadata", {}).get("timestamp")
-        if not timestamp_str:
-            return 0.5
-        
-        try:
-            timestamp = datetime.fromisoformat(timestamp_str)
-            age_hours = (datetime.utcnow() - timestamp).total_seconds() / 3600
-            return np.exp(-age_hours / 168)  # 1 week decay
-        except:
-            return 0.5
-    
-    def _extract_key_phrases(self, text: str) -> str:
-        """Extract key phrases from text for compression"""
-        stop_words = {"the", "is", "at", "which", "on", "and", "a", "an", "as", 
-                     "are", "was", "were", "been", "be"}
-        words = text.lower().split()
-        
-        key_words = []
-        for word in text.split():
-            if (word.lower() not in stop_words or 
-                word[0].isupper() or 
-                any(c.isdigit() for c in word)):
-                key_words.append(word)
-        
-        return " ".join(key_words[:int(len(key_words) * 0.6)])
+        result = app.acquire_token_for_client(scopes=GRAPH_SCOPE_DEFAULTS)
 
+    if "access_token" not in result:
+        raise RuntimeError(f"Auth failed: {result}")
+    return result["access_token"]
 
-# ==================== Tool System ====================
+# ---------------------------
+# Graph helpers
+# ---------------------------
+def gget(token: str, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"GET {url} failed: {r.status_code} {r.text}")
+    return r.json()
 
-class Tool:
-    """Base class for tools"""
-    def __init__(self):
-        self.name = ""
-        self.description = ""
-        self.parameters = {}
-    
-    async def execute(self, **kwargs) -> str:
-        raise NotImplementedError
+def get_page(token: str, site_id: str, page_id: str) -> Dict[str, Any]:
+    # e.g., site_id: "contoso.sharepoint.com,12345-abc,6789-def"
+    url = f"{GRAPH_BASE}/sites/{site_id}/pages/{page_id}"
+    return gget(token, url)
 
+def get_page_webparts(token: str, site_id: str, page_id: str) -> List[Dict[str, Any]]:
+    url = f"{GRAPH_BASE}/sites/{site_id}/pages/{page_id}/microsoft.graph.sitePage/webparts"
+    data = gget(token, url)
+    return data.get("value", [])
 
-class CalculatorTool(Tool):
-    """Calculator tool for mathematical operations"""
-    def __init__(self):
-        super().__init__()
-        self.name = "calculator"
-        self.description = "Perform mathematical calculations"
-        self.parameters = {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "Mathematical expression to evaluate"
-                }
-            },
-            "required": ["expression"]
-        }
-    
-    async def execute(self, expression: str, **kwargs) -> str:
-        try:
-            # Safe evaluation
-            allowed_names = {
-                k: v for k, v in __builtins__.items()
-                if k in ['abs', 'round', 'min', 'max', 'sum', 'pow']
-            }
-            result = eval(expression, {"__builtins__": {}}, allowed_names)
-            return f"Result: {result}"
-        except Exception as e:
-            return f"Error calculating: {str(e)}"
+# ---------------------------
+# Simple renderer
+# ---------------------------
+def escape(s: str) -> str:
+    return html.escape(s or "", quote=True)
 
+def render_webpart(wp: Dict[str, Any]) -> str:
+    wp_type = (wp.get("type") or "").lower()
+    data = wp.get("data", {})
+    # Text web part commonly exposes HTML in 'text' or 'innerHtml' (varies).
+    if "textwebpart" in wp_type:
+        inner = data.get("text") or data.get("innerHtml") or ""
+        # 'inner' is usually already HTML – keep as-is (assume trusted source from SharePoint).
+        return f'<div class="sp-webpart sp-text">{inner}</div>'
 
-class MemorySearchTool(Tool):
-    """Tool to search through memories"""
-    def __init__(self, memory_manager: MemoryManager):
-        super().__init__()
-        self.name = "memory_search"
-        self.description = "Search through user and session memories"
-        self.parameters = {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query"
-                },
-                "memory_type": {
-                    "type": "string",
-                    "enum": ["episodic", "semantic", "preference"],
-                    "description": "Type of memory to search"
-                }
-            },
-            "required": ["query"]
-        }
-        self.memory_manager = memory_manager
-    
-    async def execute(self, query: str, memory_type: Optional[str] = None, 
-                     user_id: str = None, **kwargs) -> str:
-        memory_types = [MemoryType(memory_type)] if memory_type else None
-        results = await self.memory_manager.search_memories(
-            query, user_id, memory_types=memory_types, limit=3
-        )
-        
-        if results:
-            memories = "\n".join([r.get("memory", "") for r in results[:3]])
-            return f"Found memories:\n{memories}"
-        return "No relevant memories found."
+    # Image-like parts sometimes provide a 'imageSource' or 'file' reference; show a light card
+    if "image" in wp_type and isinstance(data, dict):
+        src = data.get("imageSource") or data.get("file") or ""
+        caption = data.get("caption") or ""
+        return f'''
+        <figure class="sp-webpart sp-image">
+          <div><em>{escape(str(src))}</em></div>
+          <figcaption>{escape(caption)}</figcaption>
+        </figure>
+        '''
 
+    # File viewer, QuickLinks, List, Hero, Embed, etc. – show a compact JSON inspector
+    pretty = escape(json.dumps(data, ensure_ascii=False, indent=2))
+    tlabel = escape(wp.get("type") or "WebPart")
+    return f'''
+    <div class="sp-webpart sp-unknown">
+      <details open>
+        <summary>{tlabel}</summary>
+        <pre>{pretty}</pre>
+      </details>
+    </div>
+    '''
 
-class DateTimeTool(Tool):
-    """Tool to get current date and time"""
-    def __init__(self):
-        super().__init__()
-        self.name = "datetime"
-        self.description = "Get current date and time"
-        self.parameters = {
-            "type": "object",
-            "properties": {
-                "timezone": {
-                    "type": "string",
-                    "description": "Timezone (default: UTC)"
-                }
-            }
-        }
-    
-    async def execute(self, timezone: str = "UTC", **kwargs) -> str:
-        current_time = datetime.utcnow()
-        return f"Current time ({timezone}): {current_time.isoformat()}"
+def reconstruct_html(page: Dict[str, Any], webparts: List[Dict[str, Any]]) -> str:
+    title = page.get("title") or page.get("name") or "Page"
+    # Try to respect canvas layout if present; otherwise stack in order.
+    layout = page.get("canvasLayout", {})
+    sections = layout.get("horizontalSections") or []
 
+    if not sections:
+        # No layout info – just render all parts in order
+        body = "\n".join(render_webpart(wp) for wp in webparts)
+        return base_html(title, f'<section class="sp-section single">{body}</section>')
 
-class WebSearchTool(Tool):
-    """Simulated web search tool"""
-    def __init__(self):
-        super().__init__()
-        self.name = "web_search"
-        self.description = "Search the web for information"
-        self.parameters = {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query"
-                }
-            },
-            "required": ["query"]
-        }
-    
-    async def execute(self, query: str, **kwargs) -> str:
-        # Simulated search results
-        return f"Search results for '{query}':\n1. Example result about {query}\n2. Another relevant result\n3. Additional information"
+    # Otherwise, group by section/column indexes from each webpart's data.layout
+    # Note: shape can vary; we’ll read 'zoneIndex' (section) & 'columnIndex' (column).
+    out_sections: List[str] = []
+    for s_idx, section in enumerate(sections):
+        cols = section.get("columns") or [{"width": 12, "columnIndex": 0}]
+        col_htmls: List[str] = []
+        for c in cols:
+            c_idx = c.get("columnIndex", 0)
+            col_parts = []
+            for wp in webparts:
+                l = (wp.get("data") or {}).get("layout") or {}
+                if l.get("zoneIndex", s_idx) == s_idx and l.get("columnIndex", 0) == c_idx:
+                    col_parts.append(wp)
+            inner = "\n".join(render_webpart(wp) for wp in col_parts) or "<!-- empty -->"
+            col_htmls.append(f'<div class="sp-column sp-col-{c.get("width", 12)}">{inner}</div>')
+        out_sections.append(f'<section class="sp-section">{"".join(col_htmls)}</section>')
 
+    return base_html(title, "\n".join(out_sections))
 
-# ==================== ReAct Agent ====================
+def base_html(title: str, body_inner: str) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>{escape(title)}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
+         margin:0 auto;max-width:1200px;padding:16px;line-height:1.5}}
+    h1{{margin:0 0 16px 0;font-size:1.6rem}}
+    .sp-section{{display:flex;gap:16px;margin:0 0 24px 0}}
+    .sp-section.single{{display:block}}
+    .sp-column{{flex:1;min-width:0}}
+    .sp-webpart{{border:1px solid #ddd;padding:12px;border-radius:8px;margin-bottom:12px}}
+    .sp-text p{{margin:0 0 8px 0}}
+    details summary{{cursor:pointer}}
+    pre{{white-space:pre-wrap;word-break:break-word}}
+  </style>
+</head>
+<body>
+  <h1>{escape(title)}</h1>
+  {body_inner}
+</body>
+</html>"""
 
-class ReActAgent:
-    """ReAct (Reasoning and Acting) agent implementation"""
-    
-    REACT_PROMPT_TEMPLATE = """You are a helpful AI assistant that can reason step-by-step and use tools.
-    
-Available tools:
-{tools}
+# ---------------------------
+# Optional: CanvasContent1 fallback (SharePoint REST)
+# ---------------------------
+def get_canvas_content1(
+    token: str,
+    host: str,               # e.g., "contoso.sharepoint.com"
+    item_id: int,            # list item ID in "Site Pages" library
+    site_relative_url: str = ""  # e.g., "sites/Marketing" (no leading slash)
+) -> Dict[str, Any]:
+    """
+    Reads the Site Pages list item and returns CanvasContent1 + LayoutWebpartsContent.
+    Note: This uses SharePoint REST (not Graph). Your token must be accepted by SP (same AAD app).
+    """
+    # Build REST url
+    base = SP_REST_BASE_FMT.format(host=host)
+    site_prefix = f"/{site_relative_url}" if site_relative_url else ""
+    url = f"{base}{site_prefix}/web/lists/GetByTitle('Site Pages')/items({item_id})"
+    params = {"$select": "Title,CanvasContent1,LayoutWebpartsContent,FileRef"}
+    r = requests.get(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json;odata=nometadata"
+    }, params=params, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"SharePoint REST failed: {r.status_code} {r.text}")
+    return r.json()
 
-For complex queries requiring multiple steps, use this format EXACTLY:
-Thought: [reasoning about what to do]
-Action: [tool_name]
-Action Input: {{"param": "value"}}
-Observation: [tool output will appear here]
-... (repeat Thought/Action/Observation as needed)
-Thought: [final reasoning]
-Final Answer: [your response to the user]
+# ---------------------------
+# Example usage
+# ---------------------------
+if __name__ == "__main__":
+    """
+    Usage:
+      export AZURE_TENANT_ID=...
+      export AZURE_CLIENT_ID=...
+      export AZURE_CLIENT_SECRET=...          # or set USE_DEVICE_CODE=1 for user sign-in
+      python sp_page_reconstruct.py
+    """
+    import argparse
+    parser = argparse.ArgumentParser(description="Fetch & reconstruct a modern SharePoint page")
+    parser.add_argument("--site-id", required=True, help="Graph site ID (e.g., contoso.sharepoint.com,123,abc)")
+    parser.add_argument("--page-id", required=True, help="Page ID (GUID-like) from Graph Pages API")
+    parser.add_argument("--out", default="page.html", help="Output HTML file")
+    parser.add_argument("--debug", action="store_true", help="Print raw JSON for page and parts")
+    args = parser.parse_args()
 
-For simple queries, you can respond directly with:
-Final Answer: [your direct response]
+    token = get_access_token()
+    page = get_page(token, args.site_id, args.page_id)
+    parts = get_page_webparts(token, args.site_id, args.page_id)
 
-Current context:
-- User ID: {user_id}
-- Session ID: {session_id}
-- Relevant memories: {memories}
+    if args.debug:
+        print("=== PAGE ===")
+        print(json.dumps(page, indent=2))
+        print("=== WEBPARTS ===")
+        print(json.dumps(parts, indent=2))
 
-User message: {message}
-
-Begin your response:"""
-    
-    def __init__(self, llm_client: AsyncOpenAI, tools: List[Tool], memory_manager: MemoryManager, config: Config):
-        self.llm_client = llm_client
-        self.tools = {tool.name: tool for tool in tools}
-        self.memory_manager = memory_manager
-        self.config = config
-    
-    async def process(self,
-                     message: str,
-                     user_id: str,
-                     session_id: str,
-                     stream: bool = True) -> AsyncIterator[str]:
-        """Process message with ReAct reasoning"""
-        try:
-            # Search for relevant memories
-            memories = await self.memory_manager.search_memories(
-                message, user_id, session_id, limit=3
-            )
-            memory_text = "\n".join([m.get("memory", "") for m in memories]) if memories else "No relevant memories"
-            
-            # Format tools
-            tools_desc = "\n".join([
-                f"- {name}: {tool.description}" 
-                for name, tool in self.tools.items()
-            ])
-            
-            # Create initial prompt
-            prompt = self.REACT_PROMPT_TEMPLATE.format(
-                tools=tools_desc,
-                user_id=user_id,
-                session_id=session_id,
-                memories=memory_text,
-                message=message
-            )
-            
-            # Initialize conversation
-            reasoning_steps = []
-            current_prompt = prompt
-            final_answer = ""
-            
-            # Process with timeout
-            timeout = self.config.REASONING_TIMEOUT
-            start_time = datetime.utcnow()
-            
-            for step in range(self.config.MAX_REASONING_STEPS):
-                # Check timeout
-                if (datetime.utcnow() - start_time).total_seconds() > timeout:
-                    yield "I apologize, but I'm taking too long to process this request. Please try again.\n"
-                    break
-                
-                try:
-                    # Get LLM response
-                    response = await self.llm_client.chat.completions.create(
-                        model=self.config.OPENAI_MODEL if self.config.USE_OPENAI else self.config.LLM_MODEL,
-                        messages=[
-                            {"role": "system", "content": "You are a helpful assistant that follows the ReAct format exactly."},
-                            {"role": "user", "content": current_prompt}
-                        ],
-                        temperature=0.7,
-                        max_tokens=1000,
-                        stream=False
-                    )
-                    
-                    response_text = response.choices[0].message.content
-                    reasoning_steps.append(response_text)
-                    
-                    # Check for Final Answer
-                    if "Final Answer:" in response_text:
-                        # Extract final answer
-                        parts = response_text.split("Final Answer:")
-                        if len(parts) > 1:
-                            final_answer = parts[-1].strip()
-                            
-                            # Stream the final answer
-                            if stream:
-                                # Send chunks properly formatted
-                                words = final_answer.split()
-                                for i, word in enumerate(words):
-                                    if i > 0:
-                                        yield " "
-                                    yield word
-                                    await asyncio.sleep(self.config.STREAM_CHUNK_DELAY)
-                            else:
-                                yield final_answer
-                        break
-                    
-                    # Check for Action
-                    if "Action:" in response_text and "Action Input:" in response_text:
-                        # Parse action and input
-                        action_match = re.search(r"Action:\s*(\w+)", response_text)
-                        input_match = re.search(r"Action Input:\s*({.*?})", response_text, re.DOTALL)
-                        
-                        if action_match and input_match:
-                            action_name = action_match.group(1).strip()
-                            
-                            try:
-                                # Parse action input
-                                action_input_str = input_match.group(1).strip()
-                                action_input = json.loads(action_input_str)
-                            except json.JSONDecodeError:
-                                # Try to extract as simple string
-                                action_input = {"query": action_input_str}
-                            
-                            # Execute tool
-                            if action_name in self.tools:
-                                if stream:
-                                    yield f"\n[Thinking: Using {action_name} tool...]\n"
-                                    await asyncio.sleep(self.config.STREAM_CHUNK_DELAY)
-                                
-                                tool_result = await self.tools[action_name].execute(
-                                    user_id=user_id,
-                                    **action_input
-                                )
-                                
-                                # Add observation to prompt
-                                current_prompt += f"\n{response_text}\nObservation: {tool_result}\n"
-                                current_prompt += "Continue with your next Thought or provide Final Answer:"
-                            else:
-                                current_prompt += f"\n{response_text}\nObservation: Tool '{action_name}' not found. Please use a valid tool or provide Final Answer.\n"
-                        else:
-                            # Invalid format, ask for correction
-                            current_prompt += f"\n{response_text}\nObservation: Invalid action format. Please follow the exact format or provide Final Answer.\n"
-                    else:
-                        # No action and no final answer, treat as final
-                        if stream:
-                            words = response_text.split()
-                            for i, word in enumerate(words):
-                                if i > 0:
-                                    yield " "
-                                yield word
-                                await asyncio.sleep(self.config.STREAM_CHUNK_DELAY)
-                        else:
-                            yield response_text
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"Error in reasoning step {step}: {e}")
-                    if stream:
-                        yield f"\n[Error in reasoning: {str(e)}. Providing direct answer...]\n"
-                    
-                    # Fallback to direct answer
-                    try:
-                        fallback_response = await self.llm_client.chat.completions.create(
-                            model=self.config.OPENAI_MODEL if self.config.USE_OPENAI else self.config.LLM_MODEL,
-                            messages=[
-                                {"role": "system", "content": "Provide a helpful response to the user's question."},
-                                {"role": "user", "content": message}
-                            ],
-                            temperature=0.7,
-                            max_tokens=1000,
-                            stream=False
-                        )
-                        
-                        fallback_text = fallback_response.choices[0].message.content
-                        if stream:
-                            words = fallback_text.split()
-                            for i, word in enumerate(words):
-                                if i > 0:
-                                    yield " "
-                                yield word
-                                await asyncio.sleep(self.config.STREAM_CHUNK_DELAY)
-                        else:
-                            yield fallback_text
-                    except Exception as fallback_error:
-                        logger.error(f"Fallback also failed: {fallback_error}")
-                        yield "I encountered an error while processing your request. Please try again."
-                    break
-            
-            # Ensure we always yield something
-            if not final_answer and not reasoning_steps:
-                yield "I apologize, but I wasn't able to process your request properly. Please try again."
-                
-        except Exception as e:
-            logger.error(f"Critical error in ReAct agent: {e}\n{traceback.format_exc()}")
-            yield f"An error occurred: {str(e)}"
-
-
-# ==================== Chat Service ====================
-
-class ChatService:
-    """Main chat service with streaming support"""
-    
-    def __init__(self):
-        self.config = Config()
-        self.memory_manager = MemoryManager(self.config)
-        
-        # Initialize LLM client
-        if self.config.USE_OPENAI:
-            if not self.config.OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY is required when USE_OPENAI=true")
-            self.llm_client = AsyncOpenAI(api_key=self.config.OPENAI_API_KEY)
-        else:
-            self.llm_client = AsyncOpenAI(
-                base_url=self.config.LLM_BASE_URL,
-                api_key=self.config.LLM_API_KEY
-            )
-        
-        # Initialize tools
-        self.tools = [
-            CalculatorTool(),
-            MemorySearchTool(self.memory_manager),
-            DateTimeTool(),
-            WebSearchTool()
-        ]
-        
-        # Initialize ReAct agent
-        self.react_agent = ReActAgent(
-            self.llm_client, 
-            self.tools, 
-            self.memory_manager,
-            self.config
-        )
-    
-    async def process_chat(self, request: ChatRequest) -> AsyncIterator[str]:
-        """Process chat request with streaming response"""
-        try:
-            # Get conversation history
-            history = await self.memory_manager.get_conversation_history(
-                request.user_id, 
-                request.session_id, 
-                max_tokens=self.config.TOKEN_BUDGET_CONVERSATION
-            )
-            
-            # Store user message
-            await self.memory_manager.add_memory(
-                [{"role": "user", "content": request.message}],
-                request.user_id,
-                request.session_id,
-                MemoryType.EPISODIC
-            )
-            
-            # Process based on mode
-            assistant_response = ""
-            
-            if request.reasoning_mode:
-                # Use ReAct agent
-                logger.info(f"Processing with ReAct reasoning for user {request.user_id}")
-                
-                async for chunk in self.react_agent.process(
-                    request.message,
-                    request.user_id,
-                    request.session_id,
-                    stream=True
-                ):
-                    if chunk:
-                        assistant_response += chunk
-                        # Format as SSE
-                        yield f"data: {json.dumps({'content': chunk})}\n\n"
-                        
-            else:
-                # Direct response
-                logger.info(f"Processing direct response for user {request.user_id}")
-                
-                messages = self._prepare_messages(history, request.message, request.user_id)
-                
-                # Stream response
-                try:
-                    stream = await self.llm_client.chat.completions.create(
-                        model=self.config.OPENAI_MODEL if self.config.USE_OPENAI else self.config.LLM_MODEL,
-                        messages=messages,
-                        temperature=request.temperature,
-                        max_tokens=request.max_tokens,
-                        stream=True,
-                        tools=self._format_tools() if not self.config.USE_OPENAI else None
-                    )
-                    
-                    async for chunk in stream:
-                        if chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            assistant_response += content
-                            yield f"data: {json.dumps({'content': content})}\n\n"
-                        
-                        # Handle tool calls
-                        if hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
-                            for tool_call in chunk.choices[0].delta.tool_calls:
-                                if tool_call.function:
-                                    tool_result = await self._execute_tool_call(
-                                        tool_call.function.name,
-                                        tool_call.function.arguments,
-                                        request.user_id
-                                    )
-                                    yield f"data: {json.dumps({'tool_result': tool_result})}\n\n"
-                                    
-                except Exception as e:
-                    logger.error(f"Error in direct response: {e}")
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            
-            # Store assistant response
-            if assistant_response:
-                await self.memory_manager.add_memory(
-                    [
-                        {"role": "user", "content": request.message},
-                        {"role": "assistant", "content": assistant_response}
-                    ],
-                    request.user_id,
-                    request.session_id,
-                    MemoryType.EPISODIC
-                )
-                
-                # Extract semantic memories
-                await self._extract_semantic_memories(assistant_response, request.user_id)
-            
-            # Send completion signal
-            yield f"data: {json.dumps({'done': True})}\n\n"
-            
-        except Exception as e:
-            logger.error(f"Error in process_chat: {e}\n{traceback.format_exc()}")
-            yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
-    
-    def _prepare_messages(self, 
-                         history: List[Message], 
-                         user_message: str,
-                         user_id: str) -> List[Dict[str, str]]:
-        """Prepare messages for LLM"""
-        
-        messages = [
-            {
-                "role": "system",
-                "content": f"""You are a helpful AI assistant with memory capabilities.
-                User ID: {user_id}
-                You can use tools to help answer questions.
-                Keep responses concise and relevant."""
-            }
-        ]
-        
-        # Add history (last N messages based on config)
-        max_history = int(os.getenv("MAX_HISTORY_MESSAGES", "10"))
-        for msg in history[-max_history:]:
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
-        
-        # Add current message
-        messages.append({
-            "role": "user",
-            "content": user_message
-        })
-        
-        return messages
-    
-    def _format_tools(self) -> List[Dict[str, Any]]:
-        """Format tools for OpenAI-compatible API"""
-        formatted_tools = []
-        for tool in self.tools:
-            formatted_tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters
-                }
-            })
-        return formatted_tools
-    
-    async def _execute_tool_call(self, 
-                                tool_name: str, 
-                                arguments: str,
-                                user_id: str) -> str:
-        """Execute a tool call"""
-        tool_map = {t.name: t for t in self.tools}
-        
-        if tool_name not in tool_map:
-            return f"Tool {tool_name} not found"
-        
-        try:
-            args = json.loads(arguments) if isinstance(arguments, str) else arguments
-            args['user_id'] = user_id
-            
-            result = await tool_map[tool_name].execute(**args)
-            return result
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}")
-            return f"Error executing tool {tool_name}: {str(e)}"
-    
-    async def _extract_semantic_memories(self, text: str, user_id: str):
-        """Extract semantic facts from conversation"""
-        patterns = [
-            (r"(?:I am|I'm|My name is) ([A-Za-z]+)", "name"),
-            (r"(?:I like|I prefer|I enjoy) ([^.]+)", "preference"),
-            (r"(?:I work|I'm a|My job) ([^.]+)", "occupation"),
-        ]
-        
-        for pattern, memory_type in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                await self.memory_manager.add_memory(
-                    [{"role": "system", "content": f"User {memory_type}: {match}"}],
-                    user_id,
-                    memory_type=MemoryType.SEMANTIC
-                )
+    html_out = reconstruct_html(page, parts)
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write(html_out)
+    print(f"Wrote {args.out}")
