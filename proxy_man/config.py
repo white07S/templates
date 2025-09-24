@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     faiss_nprobe: int = Field(default=10)
     faiss_nclusters: int = Field(default=100)
 
+    # Tool Batching Configuration
+    tool_batch_max_tokens: int = Field(default=3000, env="TOOL_BATCH_MAX_TOKENS")
+    tool_result_max_tokens: int = Field(default=5000, env="TOOL_RESULT_MAX_TOKENS")
+    tool_summarize_threshold: int = Field(default=3000, env="TOOL_SUMMARIZE_THRESHOLD")
+    tool_parallel_threshold: int = Field(default=5, env="TOOL_PARALLEL_THRESHOLD")
+    tool_batch_strategy: str = Field(default="smart_batch", env="TOOL_BATCH_STRATEGY")
+
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
     api_port: int = Field(default=8000, env="API_PORT")

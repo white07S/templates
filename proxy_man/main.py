@@ -4,10 +4,12 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 from datetime import datetime
 import uuid
 from openai import AsyncOpenAI
+import tiktoken
+import json
 
 from config import settings
 from models import (
@@ -18,6 +20,7 @@ from memory_manager import MemoryOrchestrator
 from storage import ConversationStore, MemoryStore
 from tools import executor as tool_executor
 from react_agent import ReActAgent
+from optimized_openai import OptimizedChatClient
 
 # Global instances
 memory_orchestrator = MemoryOrchestrator()
@@ -39,9 +42,22 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("Shutting down...")
+    print("\n🛑 Shutting down gracefully...")
+
+    # Close FAISS vector stores cleanly
+    try:
+        from embeddings import VectorMemoryStore
+        vector_store = VectorMemoryStore()
+        if hasattr(vector_store.vector_store, 'cleanup'):
+            vector_store.vector_store.cleanup()
+    except Exception as e:
+        print(f"Warning: Could not cleanup FAISS: {e}")
+
+    # Close database connections
     conversation_store.close()
     memory_store.close()
+
+    print("✅ Shutdown complete")
 
 # Create FastAPI app
 app = FastAPI(
@@ -61,11 +77,29 @@ app.add_middleware(
 )
 
 class ChatProcessor:
-    """Core chat processing logic."""
+    """Core chat processing logic with performance optimizations."""
 
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.optimized_client = OptimizedChatClient()
         self.performance_metrics = {}
+
+        # Performance tracking
+        self._request_count = 0
+        self._total_processing_time = 0.0
+        self._cache_hits = 0
+
+        # Token counting for smart batching
+        self.tokenizer = tiktoken.encoding_for_model("gpt-4")
+
+        # Batching configuration from settings
+        self.batch_config = {
+            "max_tokens_per_batch": settings.tool_batch_max_tokens,
+            "max_tokens_per_result": settings.tool_result_max_tokens,
+            "summarize_threshold": settings.tool_summarize_threshold,
+            "parallel_threshold": settings.tool_parallel_threshold,
+            "strategy": settings.tool_batch_strategy  # "smart_batch", "sequential", or "parallel"
+        }
 
     def _should_use_react_agent(self, query: str, context: list) -> bool:
         """Determine if a query should use the ReAct agent."""
@@ -129,15 +163,12 @@ class ChatProcessor:
             )
             await session_memory.add_message(user_message)
 
-            # Get recent conversation context
-            recent_messages, context_tokens = await session_memory.get_recent_context(
-                token_budget.conversation_tokens
-            )
+            # Get recent conversation context and user memories in parallel
+            context_task = session_memory.get_recent_context(token_budget.conversation_tokens)
+            memory_task = user_memory.get_relevant_memories(request.message, token_budget.memory_tokens)
 
-            # Get relevant user memories
-            relevant_memories, memory_tokens = await user_memory.get_relevant_memories(
-                request.message,
-                token_budget.memory_tokens
+            (recent_messages, context_tokens), (relevant_memories, memory_tokens) = await asyncio.gather(
+                context_task, memory_task
             )
 
             # Build context for LLM
@@ -179,15 +210,19 @@ class ChatProcessor:
 
             # Track performance
             processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            self._request_count += 1
+            self._total_processing_time += processing_time
 
-            # Prepare metadata
+            # Prepare metadata with performance insights
             metadata = {
                 "processing_time_ms": processing_time,
                 "context_tokens": context_tokens,
                 "memory_tokens": memory_tokens,
                 "memories_count": len(relevant_memories),
                 "model": settings.chat_model,
-                "used_react_agent": use_react
+                "used_react_agent": use_react,
+                "avg_processing_time": self._total_processing_time / self._request_count,
+                "request_count": self._request_count
             }
 
             # Add ReAct metadata if applicable
@@ -266,30 +301,30 @@ class ChatProcessor:
         return base_prompt
 
     async def _generate_response(self, context: list, user_id: str) -> str:
-        """Generate response using OpenAI API with function calling support."""
+        """Generate response using optimized OpenAI API with function calling support."""
         try:
             # Get available tools
             available_tools = tool_executor.get_available_tools()
 
-            # Make initial API call with tools
-            response = await self.client.chat.completions.create(
-                model=settings.chat_model,
+            # Make initial API call with tools using optimized client
+            response = await self.optimized_client.create_completion(
                 messages=context,
                 tools=available_tools,
                 tool_choice="auto",
                 max_tokens=1000,
                 temperature=0.7,
                 presence_penalty=0.1,
-                frequency_penalty=0.1
+                frequency_penalty=0.1,
+                use_cache=True  # Enable caching for similar requests
             )
 
             response_message = response.choices[0].message
 
-            # Check if the model wants to call tools
+            # Check if the model wants to call tools (Two-step workflow)
             if response_message.tool_calls:
                 print(f"🔧 Model wants to call {len(response_message.tool_calls)} tools")
 
-                # Add the assistant's message to context
+                # Step 1: Add the assistant's initial response with tool calls to context
                 context.append({
                     "role": "assistant",
                     "content": response_message.content,
@@ -305,32 +340,48 @@ class ChatProcessor:
                     ]
                 })
 
-                # Execute tools
-                tool_results = await tool_executor.process_tool_calls([
-                    {
-                        "id": tc.id,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    } for tc in response_message.tool_calls
-                ], user_id=user_id)
+                # Step 2: Execute tools and get results
+                tool_results = await tool_executor.process_tool_calls_for_llm(response_message.tool_calls)
 
-                # Add tool results to context
+                # Step 3: Smart batching based on token counts
+                print(f"📊 Processing {len(tool_results)} tool results...")
+
+                # Check if we should summarize any large results first
+                processed_results = []
                 for result in tool_results:
-                    context.append(result)
+                    # Summarize if needed
+                    if self._count_tokens(result.get("content", "")) > self.batch_config["max_tokens_per_result"]:
+                        result = await self._summarize_tool_result(result)
+                    processed_results.append(result)
 
-                # Make second API call with tool results
-                final_response = await self.client.chat.completions.create(
-                    model=settings.chat_model,
-                    messages=context,
-                    max_tokens=1000,
-                    temperature=0.7,
-                    presence_penalty=0.1,
-                    frequency_penalty=0.1
-                )
+                # Create batches based on token sizes
+                batches = self._batch_tool_results(processed_results)
 
-                return final_response.choices[0].message.content
+                # Step 4: Process batches (sequentially or in parallel)
+                if len(batches) == 1 and len(batches[0]) == len(processed_results):
+                    # Simple case: all results fit in one batch
+                    for result in processed_results:
+                        context.append(result)
+
+                    print("🔄 Making single LLM call with all tool results...")
+                    final_response = await self.optimized_client.create_completion(
+                        messages=context,
+                        temperature=0.7,
+                        presence_penalty=0.1,
+                        frequency_penalty=0.1,
+                        use_cache=False
+                    )
+                    response_content = final_response.choices[0].message.content
+                else:
+                    # Complex case: multiple batches needed
+                    print(f"🎯 Using smart batching strategy for {len(batches)} batches")
+                    response_content = await self._process_tool_batches(
+                        context,  # Pass full context including tool calls
+                        batches
+                    )
+
+                print("✅ Two-step tool workflow completed with smart batching")
+                return response_content
 
             else:
                 # No tools called, return direct response
@@ -339,6 +390,182 @@ class ChatProcessor:
         except Exception as e:
             print(f"Error generating response: {e}")
             return "I apologize, but I'm having trouble processing your request right now. Please try again."
+
+    def _count_tokens(self, content: str) -> int:
+        """Count tokens in a string."""
+        try:
+            return len(self.tokenizer.encode(content))
+        except Exception:
+            # Fallback to approximate count if encoding fails
+            return len(content) // 4
+
+    async def _summarize_tool_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize a large tool result to reduce tokens."""
+        content = result.get("content", "")
+
+        if not content or self._count_tokens(content) < self.batch_config["summarize_threshold"]:
+            return result
+
+        print(f"📝 Summarizing large tool result ({self._count_tokens(content)} tokens)")
+
+        try:
+            summary_response = await self.optimized_client.create_completion(
+                messages=[
+                    {"role": "system", "content": "Summarize the following tool result concisely, keeping the most important information."},
+                    {"role": "user", "content": content}
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            summarized_content = summary_response.choices[0].message.content
+            return {
+                **result,
+                "content": f"[Summarized] {summarized_content}",
+                "original_tokens": self._count_tokens(content),
+                "summarized_tokens": self._count_tokens(summarized_content)
+            }
+        except Exception as e:
+            print(f"Warning: Could not summarize tool result: {e}")
+            return result
+
+    def _batch_tool_results(self, tool_results: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """
+        Batch tool results based on token counts.
+        Returns a list of batches, where each batch is a list of tool results.
+        """
+        if not tool_results:
+            return []
+
+        # Count tokens for each result
+        results_with_tokens = []
+        for result in tool_results:
+            content = result.get("content", "")
+            token_count = self._count_tokens(content)
+            results_with_tokens.append((result, token_count))
+
+        # Sort by token count (process smaller ones together)
+        results_with_tokens.sort(key=lambda x: x[1])
+
+        batches = []
+        current_batch = []
+        current_batch_tokens = 0
+        max_tokens_per_batch = self.batch_config["max_tokens_per_batch"]
+
+        for result, token_count in results_with_tokens:
+            # If single result is too large, it gets its own batch
+            if token_count > max_tokens_per_batch:
+                if current_batch:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_tokens = 0
+                batches.append([result])
+                print(f"🔍 Large tool result ({token_count} tokens) in separate batch")
+            # If adding this result would exceed batch limit, start new batch
+            elif current_batch_tokens + token_count > max_tokens_per_batch:
+                if current_batch:
+                    batches.append(current_batch)
+                current_batch = [result]
+                current_batch_tokens = token_count
+            # Add to current batch
+            else:
+                current_batch.append(result)
+                current_batch_tokens += token_count
+
+        # Add remaining batch
+        if current_batch:
+            batches.append(current_batch)
+
+        print(f"📦 Created {len(batches)} batch(es) from {len(tool_results)} tool results")
+        for i, batch in enumerate(batches):
+            batch_tokens = sum(self._count_tokens(r.get("content", "")) for r in batch)
+            print(f"  Batch {i+1}: {len(batch)} results, ~{batch_tokens} tokens")
+
+        return batches
+
+    async def _process_tool_batches(
+        self,
+        context: list,
+        batches: List[List[Dict[str, Any]]]
+    ) -> str:
+        """Process batches of tool results, either sequentially or in parallel."""
+        if not batches:
+            return "No tool results to process."
+
+        responses = []
+
+        # Determine processing strategy
+        use_parallel = (
+            len(batches) > 1 and
+            (self.batch_config["strategy"] == "parallel" or
+             (self.batch_config["strategy"] == "smart_batch" and
+              len(batches) >= self.batch_config["parallel_threshold"]))
+        )
+
+        if use_parallel:
+            print(f"⚡ Processing {len(batches)} batches in parallel")
+            # Create tasks for parallel processing
+            tasks = []
+            for i, batch in enumerate(batches):
+                batch_context = context.copy()
+                batch_context.extend(batch)
+
+                task = asyncio.create_task(
+                    self._process_single_batch(batch_context, i+1)
+                )
+                tasks.append(task)
+
+            # Wait for all tasks to complete
+            responses = await asyncio.gather(*tasks)
+
+        else:
+            print(f"📝 Processing {len(batches)} batches sequentially")
+            # Process batches sequentially
+            for i, batch in enumerate(batches):
+                batch_context = context.copy()
+                batch_context.extend(batch)
+
+                response = await self._process_single_batch(batch_context, i+1)
+                responses.append(response)
+
+        # Combine responses intelligently
+        if len(responses) == 1:
+            return responses[0]
+        else:
+            # Merge multiple responses
+            print("🔀 Merging responses from multiple batches")
+            merge_prompt = "Combine the following responses into a single coherent answer:\n\n"
+            for i, response in enumerate(responses):
+                merge_prompt += f"Response {i+1}:\n{response}\n\n"
+
+            merged_response = await self.optimized_client.create_completion(
+                messages=[
+                    {"role": "system", "content": "You are combining multiple partial responses into one complete response."},
+                    {"role": "user", "content": merge_prompt}
+                ],
+                temperature=0.5,
+                use_cache=False
+            )
+
+            return merged_response.choices[0].message.content
+
+    async def _process_single_batch(self, batch_context: list, batch_num: int) -> str:
+        """Process a single batch of tool results."""
+        print(f"🔄 Processing batch {batch_num} with {len(batch_context)} messages")
+
+        try:
+            response = await self.optimized_client.create_completion(
+                messages=batch_context,
+                temperature=0.7,
+                presence_penalty=0.1,
+                frequency_penalty=0.1,
+                use_cache=False
+            )
+
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            print(f"Error processing batch {batch_num}: {e}")
+            return f"Error processing batch {batch_num}"
 
     async def _process_memories_async(self, session_id: str, user_id: str):
         """Background task for memory processing."""
@@ -534,6 +761,20 @@ async def execute_tool_directly(tool_name: str, arguments: dict = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/tools/schema")
+async def get_tools_schema():
+    """Get the JSON schema for all available tools."""
+    try:
+        tools = tool_executor.get_available_tools()
+        return {
+            "tools": tools,
+            "count": len(tools),
+            "format": "json_schema",
+            "tool_functions": list(tool_executor.registry.tool_functions.keys())
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/debug/react")
 async def debug_react_agent(query: str, user_id: str = "test_user"):
     """Test the ReAct agent directly with a complex query."""
@@ -571,6 +812,73 @@ async def get_react_config():
         "max_actions": settings.react_max_actions,
         "parallel_limit": settings.react_parallel_limit
     }
+
+@app.get("/performance/stats")
+async def get_performance_stats():
+    """Get comprehensive performance statistics."""
+    try:
+        # Get stats from all optimized components
+        storage_stats = conversation_store.get_cache_stats()
+        memory_storage_stats = memory_store.get_cache_stats()
+        openai_stats = chat_processor.optimized_client.get_stats()
+        tool_stats = tool_executor.get_performance_stats()
+
+        # Get FAISS stats if available
+        faiss_stats = {}
+        try:
+            from embeddings import VectorMemoryStore
+            vector_store = VectorMemoryStore()
+            faiss_stats = vector_store.vector_store.get_stats()
+        except Exception as e:
+            faiss_stats = {"error": str(e)}
+
+        return {
+            "overall": {
+                "total_requests": chat_processor._request_count,
+                "avg_processing_time_ms": chat_processor._total_processing_time / max(chat_processor._request_count, 1),
+                "cache_hits": chat_processor._cache_hits
+            },
+            "storage": {
+                "conversation_store": storage_stats,
+                "memory_store": memory_storage_stats
+            },
+            "openai": openai_stats,
+            "tools": tool_stats,
+            "faiss": faiss_stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/performance/clear-caches")
+async def clear_all_caches():
+    """Clear all caches for testing purposes."""
+    try:
+        # Clear all caches
+        conversation_store.query_cache.clear()
+        conversation_store.document_cache.clear()
+        memory_store.query_cache.clear()
+        memory_store.document_cache.clear()
+
+        chat_processor.optimized_client.response_cache.clear()
+        chat_processor.optimized_client.compression_cache.clear()
+
+        tool_executor.registry.clear_cache()
+
+        # Clear FAISS search cache if available
+        try:
+            from embeddings import VectorMemoryStore
+            vector_store = VectorMemoryStore()
+            vector_store.vector_store.search_cache.clear()
+        except Exception:
+            pass
+
+        return {
+            "message": "All caches cleared successfully",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
