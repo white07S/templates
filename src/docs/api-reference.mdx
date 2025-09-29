@@ -1,0 +1,185 @@
+---
+title: API Reference
+description: Complete API documentation and endpoints
+sidebar_position: 3
+---
+
+# API Reference
+
+This section provides comprehensive documentation for all available API endpoints.
+
+## Base URL
+
+All API requests should be made to:
+
+```
+https://api.example.com/v1
+```
+
+## Authentication
+
+API requests require authentication using Bearer tokens:
+
+```javascript
+headers: {
+  'Authorization': 'Bearer YOUR_ACCESS_TOKEN',
+  'Content-Type': 'application/json'
+}
+```
+
+## Endpoints
+
+### Users
+
+#### Get User Profile
+
+Retrieve the current user's profile information.
+
+```http
+GET /users/profile
+```
+
+**Response:**
+
+```json
+{
+  "id": "user_123",
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "role": "admin",
+  "createdAt": "2024-01-01T00:00:00Z"
+}
+```
+
+#### Update User Profile
+
+Update user profile information.
+
+```http
+PUT /users/profile
+```
+
+**Request Body:**
+
+```json
+{
+  "name": "John Smith",
+  "email": "john.smith@example.com"
+}
+```
+
+### Data Operations
+
+#### List Items
+
+Retrieve a paginated list of items.
+
+```http
+GET /items?page=1&limit=10&sort=created_desc
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| page | integer | Page number | 1 |
+| limit | integer | Items per page | 10 |
+| sort | string | Sort order | created_desc |
+| filter | string | Filter criteria | - |
+
+**Response:**
+
+```json
+{
+  "data": [
+    {
+      "id": "item_1",
+      "name": "Item One",
+      "description": "Description of item",
+      "status": "active"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 100,
+    "pages": 10
+  }
+}
+```
+
+#### Create Item
+
+Create a new item.
+
+```http
+POST /items
+```
+
+**Request Body:**
+
+```json
+{
+  "name": "New Item",
+  "description": "Item description",
+  "category": "category_1"
+}
+```
+
+#### Update Item
+
+Update an existing item.
+
+```http
+PUT /items/:id
+```
+
+#### Delete Item
+
+Delete an item.
+
+```http
+DELETE /items/:id
+```
+
+## Error Handling
+
+API errors follow a consistent format:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid input data",
+    "details": {
+      "field": "email",
+      "issue": "Invalid email format"
+    }
+  }
+}
+```
+
+### Error Codes
+
+| Code | HTTP Status | Description |
+|------|-------------|-------------|
+| UNAUTHORIZED | 401 | Authentication required |
+| FORBIDDEN | 403 | Insufficient permissions |
+| NOT_FOUND | 404 | Resource not found |
+| VALIDATION_ERROR | 422 | Invalid input data |
+| SERVER_ERROR | 500 | Internal server error |
+
+## Rate Limiting
+
+API requests are limited to:
+
+- 1000 requests per hour for authenticated users
+- 100 requests per hour for unauthenticated users
+
+Rate limit information is included in response headers:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 999
+X-RateLimit-Reset: 1640995200
+```

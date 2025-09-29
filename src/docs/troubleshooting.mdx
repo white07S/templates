@@ -1,0 +1,201 @@
+---
+title: Troubleshooting
+description: Common issues and their solutions
+sidebar_position: 5
+---
+
+# Troubleshooting
+
+This guide helps you resolve common issues you might encounter.
+
+## Common Issues
+
+### Installation Problems
+
+#### Node Version Mismatch
+
+**Problem:** Getting errors about incompatible Node.js version.
+
+**Solution:**
+```bash
+# Check your Node version
+node --version
+
+# Use nvm to install and use correct version
+nvm install 14
+nvm use 14
+```
+
+#### Dependency Conflicts
+
+**Problem:** npm install fails with dependency conflicts.
+
+**Solution:**
+```bash
+# Clear npm cache
+npm cache clean --force
+
+# Delete node_modules and package-lock.json
+rm -rf node_modules package-lock.json
+
+# Reinstall dependencies
+npm install
+```
+
+### Build Errors
+
+#### Module Not Found
+
+**Problem:** Build fails with "Module not found" error.
+
+**Solution:**
+1. Check if the module is installed:
+   ```bash
+   npm list module-name
+   ```
+2. Install missing module:
+   ```bash
+   npm install module-name
+   ```
+3. Verify import path is correct
+
+#### Out of Memory
+
+**Problem:** Build process runs out of memory.
+
+**Solution:**
+```bash
+# Increase Node memory limit
+export NODE_OPTIONS="--max-old-space-size=4096"
+npm run build
+```
+
+### Runtime Errors
+
+#### CORS Issues
+
+**Problem:** API calls blocked by CORS policy.
+
+**Solution:**
+```javascript
+// Configure proxy in package.json
+{
+  "proxy": "https://api.example.com"
+}
+
+// Or configure CORS headers on server
+res.setHeader('Access-Control-Allow-Origin', '*');
+```
+
+#### State Update Warnings
+
+**Problem:** "Can't perform state update on unmounted component" warning.
+
+**Solution:**
+```javascript
+useEffect(() => {
+  let isMounted = true;
+
+  fetchData().then(data => {
+    if (isMounted) {
+      setData(data);
+    }
+  });
+
+  return () => {
+    isMounted = false;
+  };
+}, []);
+```
+
+## Performance Issues
+
+### Slow Initial Load
+
+**Causes and Solutions:**
+
+1. **Large bundle size**
+   - Implement code splitting
+   - Lazy load components
+   - Use dynamic imports
+
+2. **Unoptimized images**
+   - Compress images
+   - Use appropriate formats (WebP, AVIF)
+   - Implement lazy loading
+
+3. **Too many requests**
+   - Bundle assets
+   - Use CDN
+   - Enable caching
+
+### Memory Leaks
+
+**Detection:**
+```javascript
+// Use React DevTools Profiler
+// Monitor component render times and memory usage
+```
+
+**Common Causes:**
+- Event listeners not removed
+- Timers not cleared
+- Subscriptions not unsubscribed
+
+**Prevention:**
+```javascript
+useEffect(() => {
+  const timer = setInterval(() => {
+    // Do something
+  }, 1000);
+
+  // Cleanup
+  return () => clearInterval(timer);
+}, []);
+```
+
+## Debugging Tips
+
+### Browser DevTools
+
+1. **Console Debugging**
+   ```javascript
+   console.log('Data:', data);
+   console.table(arrayData);
+   console.trace('Trace call stack');
+   ```
+
+2. **Breakpoints**
+   - Add `debugger;` statement in code
+   - Set breakpoints in Sources tab
+
+3. **Network Tab**
+   - Monitor API calls
+   - Check response data
+   - Verify headers
+
+### React Developer Tools
+
+- Inspect component tree
+- View props and state
+- Profile performance
+- Track renders
+
+## Getting Help
+
+If you're still experiencing issues:
+
+1. Check the [GitHub Issues](https://github.com/your-repo/issues)
+2. Search [Stack Overflow](https://stackoverflow.com)
+3. Join our [Discord Community](https://discord.gg/your-server)
+4. Contact support at support@example.com
+
+### Reporting Bugs
+
+When reporting issues, please include:
+
+1. Error message and stack trace
+2. Steps to reproduce
+3. Environment details (OS, Node version, browser)
+4. Relevant code snippets
+5. Expected vs actual behavior

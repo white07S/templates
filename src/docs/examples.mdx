@@ -1,0 +1,276 @@
+---
+title: Examples
+description: Practical examples and code snippets
+sidebar_position: 4
+---
+
+# Examples
+
+This section provides practical examples to help you implement common use cases.
+
+## React Components
+
+### Basic Form Component
+
+A simple form with validation:
+
+```jsx
+import React, { useState } from 'react';
+
+function ContactForm() {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    message: ''
+  });
+
+  const [errors, setErrors] = useState({});
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const validate = () => {
+    const newErrors = {};
+
+    if (!formData.name) {
+      newErrors.name = 'Name is required';
+    }
+
+    if (!formData.email) {
+      newErrors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      newErrors.email = 'Email is invalid';
+    }
+
+    if (!formData.message) {
+      newErrors.message = 'Message is required';
+    }
+
+    return newErrors;
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const validationErrors = validate();
+
+    if (Object.keys(validationErrors).length === 0) {
+      // Submit form
+      console.log('Form submitted:', formData);
+    } else {
+      setErrors(validationErrors);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="text"
+        name="name"
+        value={formData.name}
+        onChange={handleChange}
+        placeholder="Your Name"
+      />
+      {errors.name && <span>{errors.name}</span>}
+
+      <input
+        type="email"
+        name="email"
+        value={formData.email}
+        onChange={handleChange}
+        placeholder="Your Email"
+      />
+      {errors.email && <span>{errors.email}</span>}
+
+      <textarea
+        name="message"
+        value={formData.message}
+        onChange={handleChange}
+        placeholder="Your Message"
+      />
+      {errors.message && <span>{errors.message}</span>}
+
+      <button type="submit">Send Message</button>
+    </form>
+  );
+}
+```
+
+### Data Fetching with Hooks
+
+Custom hook for API data fetching:
+
+```jsx
+import { useState, useEffect } from 'react';
+
+function useApi(url) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const jsonData = await response.json();
+        setData(jsonData);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [url]);
+
+  return { data, loading, error };
+}
+
+// Usage
+function UserList() {
+  const { data, loading, error } = useApi('/api/users');
+
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error}</div>;
+
+  return (
+    <ul>
+      {data?.map(user => (
+        <li key={user.id}>{user.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+## State Management Patterns
+
+### Context with Reducer
+
+Complex state management using Context and useReducer:
+
+```jsx
+import React, { createContext, useContext, useReducer } from 'react';
+
+// Initial state
+const initialState = {
+  user: null,
+  theme: 'light',
+  notifications: []
+};
+
+// Action types
+const ActionTypes = {
+  SET_USER: 'SET_USER',
+  SET_THEME: 'SET_THEME',
+  ADD_NOTIFICATION: 'ADD_NOTIFICATION',
+  REMOVE_NOTIFICATION: 'REMOVE_NOTIFICATION'
+};
+
+// Reducer
+function appReducer(state, action) {
+  switch (action.type) {
+    case ActionTypes.SET_USER:
+      return { ...state, user: action.payload };
+
+    case ActionTypes.SET_THEME:
+      return { ...state, theme: action.payload };
+
+    case ActionTypes.ADD_NOTIFICATION:
+      return {
+        ...state,
+        notifications: [...state.notifications, action.payload]
+      };
+
+    case ActionTypes.REMOVE_NOTIFICATION:
+      return {
+        ...state,
+        notifications: state.notifications.filter(
+          n => n.id !== action.payload
+        )
+      };
+
+    default:
+      return state;
+  }
+}
+
+// Context
+const AppContext = createContext();
+
+// Provider
+export function AppProvider({ children }) {
+  const [state, dispatch] = useReducer(appReducer, initialState);
+
+  return (
+    <AppContext.Provider value={{ state, dispatch }}>
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+// Custom hook
+export function useApp() {
+  const context = useContext(AppContext);
+
+  if (!context) {
+    throw new Error('useApp must be used within AppProvider');
+  }
+
+  return context;
+}
+```
+
+## Utility Functions
+
+### Debounce Function
+
+Prevent excessive API calls:
+
+```javascript
+function debounce(func, delay) {
+  let timeoutId;
+
+  return function (...args) {
+    clearTimeout(timeoutId);
+
+    timeoutId = setTimeout(() => {
+      func.apply(this, args);
+    }, delay);
+  };
+}
+
+// Usage
+const debouncedSearch = debounce((searchTerm) => {
+  console.log('Searching for:', searchTerm);
+  // Make API call
+}, 500);
+```
+
+### Format Currency
+
+Format numbers as currency:
+
+```javascript
+function formatCurrency(amount, currency = 'USD', locale = 'en-US') {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: currency
+  }).format(amount);
+}
+
+// Usage
+console.log(formatCurrency(1234.56)); // $1,234.56
+console.log(formatCurrency(1234.56, 'EUR', 'de-DE')); // 1.234,56 €
+```
