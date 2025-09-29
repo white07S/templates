@@ -1,27 +1,18 @@
-import requests
-
-URL = "http://localhost:8002/v1/rerank"  # adjust port if needed
-HEADERS = {
-    "Authorization": "Bearer dummy",
-    "Content-Type": "application/json",
-}
-
-payload = {
-    "model": "BAAI/bge-reranker-v2-m3",     # optional; server default is fine
-    "query": "what is vLLM used for?",
-    "documents": [
-        "vLLM is a fast LLM inference engine optimized for throughput.",
-        "The capital of France is Paris.",
-        "Cats are small domesticated carnivores.",
-    ],
-    "top_n": 3,                 # return top-k results
-    "return_documents": True,   # include matched document text in results
-}
-
-resp = requests.post(URL, headers=HEADERS, json=payload, timeout=30)
-resp.raise_for_status()
-data = resp.json()
-
-# Expected shape: {"results": [{"index": int, "relevance_score": float, "document": "..."}], ...}
-for i, r in enumerate(sorted(data["results"], key=lambda x: -x["relevance_score"])):
-    print(f"{i+1}. score={r['relevance_score']:.4f}  idx={r['index']}  doc={r.get('document')}")
+    "@mdx-js/loader": "^3.1.1",
+    "@mdx-js/react": "^3.1.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^13.5.0",
+    "gray-matter": "^4.0.3",
+    "katex": "^0.16.22",
+    "lunr": "^2.3.9",
+    "mermaid": "^11.12.0",
+    "prism-react-renderer": "^2.4.1",
+    "prismjs": "^1.30.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-katex": "^3.1.0",
+    "react-router-dom": "^7.9.2",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4"
