@@ -1,0 +1,308 @@
+---
+title: Math Formulas & Code Examples
+description: Mathematical formulas and enhanced code blocks with copy functionality
+sidebar_position: 6
+---
+
+# Math Formulas & Code Examples
+
+This page demonstrates mathematical formula rendering and code blocks with copy functionality.
+
+## Mathematical Formulas
+
+### Inline Math
+
+You can include inline math formulas like $E = mc^2$ or the quadratic formula $x = \frac\{-b \pm \sqrt\{b^2-4ac\}\}\{2a\}$ directly in your text.
+
+### Block Math Formulas
+
+For more complex mathematical expressions, use block math:
+
+```math
+\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}
+```
+
+### Advanced Mathematical Examples
+
+#### Calculus
+
+The fundamental theorem of calculus:
+
+```math
+\int_a^b f'(x) \, dx = f(b) - f(a)
+```
+
+#### Linear Algebra
+
+Matrix multiplication:
+
+```math
+\begin{pmatrix}
+a & b \\
+c & d
+\end{pmatrix}
+\begin{pmatrix}
+e & f \\
+g & h
+\end{pmatrix}
+=
+\begin{pmatrix}
+ae + bg & af + bh \\
+ce + dg & cf + dh
+\end{pmatrix}
+```
+
+#### Statistics
+
+Normal distribution probability density function:
+
+```math
+f(x) = \frac{1}{\sigma\sqrt{2\pi}} e^{-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2}
+```
+
+#### Complex Analysis
+
+Euler's formula:
+
+```math
+e^{i\theta} = \cos\theta + i\sin\theta
+```
+
+#### Differential Equations
+
+The general solution to a second-order linear homogeneous equation:
+
+```math
+y'' + p(x)y' + q(x)y = 0
+```
+
+### Greek Letters and Symbols
+
+Common mathematical symbols: $\alpha, \beta, \gamma, \Delta, \Sigma, \Omega$
+
+Summation: $\sum_\{i=1\}^\{n\} x_i = x_1 + x_2 + \ldots + x_n$
+
+Integration: $\int_0^1 x^2 dx = \frac\{1\}\{3\}$
+
+## Code Blocks with Copy Functionality
+
+All code blocks now include a copy button in the top-right corner. Try copying the examples below:
+
+### JavaScript
+
+```javascript
+// Fibonacci sequence generator
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// Memoized version for better performance
+const fibMemo = (function() {
+  const cache = {};
+  return function fib(n) {
+    if (n in cache) return cache[n];
+    if (n <= 1) return n;
+    return cache[n] = fib(n - 1) + fib(n - 2);
+  };
+})();
+
+console.log(fibonacci(10)); // 55
+console.log(fibMemo(10)); // 55
+```
+
+### Python
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Generate sample data
+x = np.linspace(0, 10, 100)
+y = np.sin(x) * np.exp(-x/5)
+
+# Create the plot
+plt.figure(figsize=(10, 6))
+plt.plot(x, y, 'b-', linewidth=2, label='sin(x) * exp(-x/5)')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.title('Damped Sine Wave')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+### SQL
+
+```sql
+-- Complex query with window functions
+SELECT
+    employee_id,
+    department_id,
+    salary,
+    AVG(salary) OVER (PARTITION BY department_id) as dept_avg_salary,
+    RANK() OVER (PARTITION BY department_id ORDER BY salary DESC) as salary_rank,
+    LAG(salary, 1) OVER (PARTITION BY department_id ORDER BY salary) as prev_salary
+FROM employees
+WHERE hire_date >= '2020-01-01'
+ORDER BY department_id, salary DESC;
+```
+
+### Bash/Shell
+
+```bash
+#!/bin/bash
+
+# Automated backup script
+BACKUP_DIR="/backup"
+SOURCE_DIR="/home/user/documents"
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="backup_$DATE.tar.gz"
+
+# Create backup directory if it doesn't exist
+mkdir -p "$BACKUP_DIR"
+
+# Create compressed backup
+echo "Creating backup: $BACKUP_FILE"
+tar -czf "$BACKUP_DIR/$BACKUP_FILE" "$SOURCE_DIR"
+
+# Check if backup was successful
+if [ $? -eq 0 ]; then
+    echo "Backup completed successfully!"
+
+    # Remove backups older than 30 days
+    find "$BACKUP_DIR" -name "backup_*.tar.gz" -mtime +30 -delete
+    echo "Old backups cleaned up."
+else
+    echo "Backup failed!"
+    exit 1
+fi
+```
+
+### JSON Configuration
+
+```json
+{
+  "name": "documentation-app",
+  "version": "1.0.0",
+  "description": "A modern documentation system with math support",
+  "main": "index.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "jest --coverage",
+    "deploy": "npm run build && gh-pages -d build"
+  },
+  "dependencies": {
+    "react": "^18.0.0",
+    "katex": "^0.16.0",
+    "mermaid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^13.0.0",
+    "eslint": "^8.0.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
+```
+
+### CSS with Advanced Features
+
+```css
+/* Modern CSS with custom properties and grid */
+:root {
+  --primary-color: #e60000;
+  --secondary-color: #f5f5f5;
+  --text-color: #333333;
+  --border-radius: 0; /* UBS boxy design */
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.documentation-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "sidebar header"
+    "sidebar main";
+  min-height: 100vh;
+  gap: 0;
+}
+
+.sidebar {
+  grid-area: sidebar;
+  background: var(--secondary-color);
+  border-right: 2px solid var(--primary-color);
+  overflow-y: auto;
+}
+
+.main-content {
+  grid-area: main;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .documentation-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "main";
+  }
+
+  .sidebar {
+    position: fixed;
+    left: -280px;
+    top: 0;
+    height: 100vh;
+    width: 280px;
+    z-index: 1000;
+    transition: left 0.3s ease;
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+}
+```
+
+## Features
+
+### Code Block Features
+
+- **Copy Button**: Click the copy button in the top-right corner of any code block
+- **Language Detection**: Automatic syntax highlighting for various programming languages
+- **Language Label**: Shows the programming language in the top-left corner
+- **Line Numbers**: Clean formatting with proper indentation
+- **Horizontal Scrolling**: Long lines can be scrolled horizontally
+
+### Math Formula Features
+
+- **Inline Math**: Use single dollar signs for inline formulas like $\alpha + \beta$
+- **Block Math**: Use triple backticks with `math` or `latex` language for block formulas
+- **KaTeX Rendering**: Fast and accurate mathematical typesetting
+- **Error Handling**: Graceful fallback for invalid LaTeX syntax
+- **Responsive**: Math formulas adapt to different screen sizes
+
+### Supported Math Elements
+
+- Greek letters: $\alpha, \beta, \gamma, \delta, \epsilon, \zeta, \eta, \theta$
+- Operators: $+, -, \times, \div, \pm, \mp, \cdot$
+- Relations: $=, \neq, \lt, \gt, \leq, \geq, \approx, \equiv$
+- Functions: $\sin, \cos, \tan, \log, \ln, \exp, \sqrt\{x\}$
+- Calculus: $\int, \sum, \prod, \lim, \partial, \nabla$
+- Set theory: $\in, \notin, \subset, \subseteq, \cup, \cap, \emptyset$
+
+Try copying any of the code examples above to test the copy functionality!
