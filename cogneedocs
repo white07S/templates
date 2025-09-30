@@ -1,38 +1,11 @@
-from lightrag import LightRAG, QueryParam
-from lightrag.llm.openai import openai_embed, gpt_4o_mini_complete
-from lightrag.kg.shared_storage import initialize_pipeline_status
-import asyncio, os
+from sglang.test.doc_patch import launch_server_cmd
+from sglang.utils import wait_for_server, print_highlight, terminate_process
 
-async def run_structured_query():
-    # 1. Initialize
-    WORKING_DIR = "./rag_storage"
-    os.makedirs(WORKING_DIR, exist_ok=True)
-    rag = LightRAG(
-        working_dir=WORKING_DIR,
-        embedding_func=openai_embed,
-        llm_model_func=gpt_4o_mini_complete,
-    )
-    await rag.initialize_storages()
-    await initialize_pipeline_status()
+embedding_process, port = launch_server_cmd(
+    """
+python3 -m sglang.launch_server --model-path Alibaba-NLP/gte-Qwen2-1.5B-instruct \
+    --host 0.0.0.0 --is-embedding --log-level warning
+"""
+)
 
-    # 2. Build a QueryParam that asks for JSON
-    param = QueryParam(
-        mode="hybrid",                        # or "local"/"global"/etc.
-        response_type="JSON",                 # instructs LLM to emit JSON
-        # Optionally further customize the prompt:
-        user_prompt=(
-            "Please answer the question in valid JSON format "
-            "with keys 'summary', 'entities', and 'relations'."
-        )
-    )
-
-    # 3. Fire your query
-    question = "What are the main characters and their relationships in this text?"
-    structured_json = await rag.aquery(question, param=param)
-
-    print(structured_json)  # should be a JSON string you can parse
-
-    # 4. Clean up
-    await rag.finalize_storages()
-
-asyncio.run(run_structured_query())
+wait_for_server(f"http://localhost:{port}")
