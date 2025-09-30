@@ -1,458 +1,212 @@
-"""Hybrid search implementation using Tantivy and FAISS with performance optimizations."""
+"""Main search interface for the search engine."""
 
-import tantivy
-from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple
-import asyncio
-from datetime import datetime
-import math
+import json
 import numpy as np
-from rake_nltk import Rake
-from collections import defaultdict
-import time
-import hashlib
+import argparse
+from typing import Dict, Any, List, Optional
 
-from config import settings
-from models import SearchResult, Memory, IntentType
-from embeddings import VectorMemoryStore
-from cache_utils import TTLCache, LRUCache, async_cache
+from src.core.models import SearchMode, SearchRequest, SearchResult
+from src.core.config import SearchConfig
+from src.search.search_engine import SearchEngine
 
-class TantivySearchEngine:
-    """Full-text search using Tantivy with performance optimizations."""
 
-    def __init__(self):
-        self.index_path = str(settings.tantivy_index_path)
-        self.schema = self._build_schema()
-        self.index = self._load_or_create_index()
-        self.rake = Rake()
+def parse_column_value_pairs(pairs: List[str]) -> Dict[str, Any]:
+    """Parse column-value pairs from command line arguments.
 
-        # Performance optimizations
-        self.keyword_cache = LRUCache(maxsize=500)  # Cache keyword extractions
-        self.search_cache = TTLCache(maxsize=200, ttl=300)  # Cache search results
+    Args:
+        pairs: List of "column=value" strings
 
-    def _build_schema(self) -> tantivy.Schema:
-        """Build the Tantivy schema."""
-        schema_builder = tantivy.SchemaBuilder()
+    Returns:
+        Dictionary of column-value pairs
+    """
+    result = {}
+    for pair in pairs:
+        if '=' not in pair:
+            raise ValueError(f"Invalid column-value pair: {pair}")
+        column, value = pair.split('=', 1)
 
-        # Add fields
-        schema_builder.add_text_field("content", stored=True, tokenizer_name='en_stem')
-        schema_builder.add_text_field("compressed_content", stored=True, tokenizer_name='en_stem')
-        schema_builder.add_text_field("keywords", stored=True)
-        schema_builder.add_text_field("user_id", stored=True)
-        schema_builder.add_text_field("session_id", stored=True)
-        schema_builder.add_text_field("memory_id", stored=True)
-        schema_builder.add_text_field("memory_type", stored=True)
-        schema_builder.add_date_field("timestamp", stored=True)
-        schema_builder.add_float_field("importance_score", stored=True, indexed=True)
-
-        return schema_builder.build()
-
-    def _load_or_create_index(self) -> tantivy.Index:
-        """Load existing index or create new one."""
+        # Try to parse value as different types
         try:
-            # Try to open existing index
-            index = tantivy.Index(self.schema, path=self.index_path)
-            return index
-        except Exception as e:
-            print(f"Creating new Tantivy index: {e}")
-            # Create new index
-            Path(self.index_path).mkdir(parents=True, exist_ok=True)
-            index = tantivy.Index(self.schema, path=self.index_path)
-            return index
-
-    def extract_keywords(self, text: str) -> List[str]:
-        """Extract keywords using RAKE with caching."""
-        # Try cache first
-        cached_keywords = self.keyword_cache.get(text)
-        if cached_keywords is not None:
-            return cached_keywords
-
-        try:
-            self.rake.extract_keywords_from_text(text)
-            keywords = self.rake.get_ranked_phrases()[:10]  # Top 10 keywords
-
-            # Cache the result
-            self.keyword_cache.set(text, keywords)
-            return keywords
-
-        except Exception as e:
-            print(f"Error extracting keywords: {e}")
-            # Fallback to simple word extraction
-            words = text.lower().split()
-            fallback_keywords = list(set(words))[:10]
-
-            # Cache fallback result too
-            self.keyword_cache.set(text, fallback_keywords)
-            return fallback_keywords
-
-    def add_document(
-        self,
-        content: str,
-        user_id: str,
-        memory_id: str,
-        memory_type: str,
-        session_id: Optional[str] = None,
-        compressed_content: Optional[str] = None,
-        importance_score: float = 0.5,
-        timestamp: Optional[datetime] = None
-    ):
-        """Add a document to the index."""
-        writer = self.index.writer()
-
-        # Extract keywords
-        keywords = self.extract_keywords(content)
-
-        # Build document
-        doc = tantivy.Document()
-        doc.add_text("content", content)
-        doc.add_text("user_id", user_id)
-        doc.add_text("memory_id", memory_id)
-        doc.add_text("memory_type", memory_type)
-        doc.add_text("keywords", " ".join(keywords))
-
-        if compressed_content:
-            doc.add_text("compressed_content", compressed_content)
-
-        if session_id:
-            doc.add_text("session_id", session_id)
-
-        doc.add_float("importance_score", importance_score)
-
-        if timestamp:
-            doc.add_date("timestamp", timestamp)
-
-        writer.add_document(doc)
-        writer.commit()
-
-    def search(
-        self,
-        query: str,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        limit: int = 20
-    ) -> List[SearchResult]:
-        """Search the index with caching."""
-        # Generate cache key
-        cache_key = hashlib.md5(f"{query}_{user_id}_{session_id}_{limit}".encode()).hexdigest()
-
-        # Try cache first
-        cached_results = self.search_cache.get(cache_key)
-        if cached_results is not None:
-            return cached_results
-
-        searcher = self.index.searcher()
-
-        # Build query
-        query_parts = []
-
-        # Add content query
-        query_parts.append(f'content:"{query}"')
-
-        # Add filters
-        if user_id:
-            query_parts.append(f'user_id:{user_id}')
-
-        if session_id:
-            query_parts.append(f'session_id:{session_id}')
-
-        # Join query parts
-        full_query = " AND ".join(query_parts) if len(query_parts) > 1 else query_parts[0]
-
-        # Parse and execute query
-        try:
-            query_obj = self.index.parse_query(full_query, ["content", "compressed_content", "keywords"])
-            search_results = searcher.search(query_obj, limit).hits
-        except Exception as e:
-            print(f"Error parsing query: {e}")
-            # Fallback to simple content search
-            query_obj = self.index.parse_query(query, ["content"])
-            search_results = searcher.search(query_obj, limit).hits
-
-        # Convert to SearchResult objects
-        results = []
-        for score, doc_address in search_results:
-            doc = searcher.doc(doc_address)
-
-            # Extract fields
-            content = doc.get_first("content") or ""
-            memory_id = doc.get_first("memory_id") or ""
-            memory_type = doc.get_first("memory_type") or ""
-            importance = doc.get_first("importance_score") or 0.5
-
-            metadata = {
-                'memory_id': memory_id,
-                'memory_type': memory_type,
-                'importance_score': importance,
-                'tantivy_score': score
-            }
-
-            results.append(SearchResult(
-                content=content,
-                score=score,
-                source="lexical",
-                metadata=metadata
-            ))
-
-        # Cache the results
-        self.search_cache.set(cache_key, results)
-
-        return results
-
-    def update_document(
-        self,
-        memory_id: str,
-        content: str,
-        compressed_content: Optional[str] = None
-    ):
-        """Update an existing document."""
-        # Tantivy doesn't support updates directly, so we delete and re-add
-        writer = self.index.writer()
-
-        # Delete old document
-        writer.delete_term(self.schema.get_field("memory_id").unwrap(), memory_id)
-
-        # Commit deletion
-        writer.commit()
-
-        # Add updated document (would need full metadata in practice)
-        # This is simplified - in production, you'd retrieve the full document first
-        self.add_document(
-            content=content,
-            user_id="",  # Would need to retrieve this
-            memory_id=memory_id,
-            memory_type="",  # Would need to retrieve this
-            compressed_content=compressed_content
-        )
-
-class HybridRetriever:
-    """Combines lexical and semantic search with Reciprocal Rank Fusion and performance optimizations."""
-
-    def __init__(self):
-        self.tantivy_engine = TantivySearchEngine()
-        self.vector_store = VectorMemoryStore()
-        self.intent_weights = {
-            IntentType.META_QUERY: {"relevance": 0.3, "recency": 0.7},
-            IntentType.SEMANTIC_SEARCH: {"relevance": 0.8, "recency": 0.2},
-            IntentType.TEMPORAL_QUERY: {"relevance": 0.4, "recency": 0.6},
-            IntentType.MEMORY_RETRIEVAL: {"relevance": 0.6, "recency": 0.4},
-            IntentType.GENERAL: {"relevance": 0.5, "recency": 0.5}
-        }
-
-        # Performance optimizations
-        self.search_result_cache = TTLCache(maxsize=100, ttl=300)  # 5-min cache
-        self.temporal_score_cache = {}  # Pre-computed temporal scores
-        self.intent_cache = LRUCache(maxsize=200)  # Cache intent classifications
-
-        # Background task for temporal score updates
-        self._start_temporal_score_updater()
-
-    def classify_intent(self, query: str) -> IntentType:
-        """Classify the intent of a query with caching."""
-        # Try cache first
-        cached_intent = self.intent_cache.get(query)
-        if cached_intent is not None:
-            return cached_intent
-
-        query_lower = query.lower()
-
-        # Meta query patterns
-        meta_patterns = ["previous", "last", "earlier", "before", "ago", "what did i", "what was"]
-        if any(pattern in query_lower for pattern in meta_patterns):
-            intent = IntentType.META_QUERY
-        # Temporal query patterns
-        elif any(pattern in query_lower for pattern in ["when", "yesterday", "today", "week", "month", "date", "time"]):
-            intent = IntentType.TEMPORAL_QUERY
-        # Memory retrieval patterns
-        elif any(pattern in query_lower for pattern in ["remember", "recall", "memory", "forgot", "remind"]):
-            intent = IntentType.MEMORY_RETRIEVAL
-        # Semantic search patterns
-        elif any(pattern in query_lower for pattern in ["about", "related", "similar", "like", "regarding"]):
-            intent = IntentType.SEMANTIC_SEARCH
-        else:
-            intent = IntentType.GENERAL
-
-        # Cache the result
-        self.intent_cache.set(query, intent)
-        return intent
-
-    def _start_temporal_score_updater(self):
-        """Start background task to update temporal scores."""
-        async def update_temporal_scores():
-            while True:
-                try:
-                    await self._update_temporal_scores()
-                    await asyncio.sleep(300)  # Update every 5 minutes
-                except Exception as e:
-                    print(f"Error updating temporal scores: {e}")
-                    await asyncio.sleep(60)  # Retry after 1 minute on error
-
-        # Start background task
-        asyncio.create_task(update_temporal_scores())
-
-    async def _update_temporal_scores(self):
-        """Pre-compute temporal scores for better performance."""
-        print("🔄 Updating temporal score cache...")
-        now = datetime.utcnow()
-
-        # Clear old cache
-        self.temporal_score_cache.clear()
-
-        # Sample time points for pre-computation
-        time_points = [
-            now.timestamp() - i * 3600  # Every hour for the last day
-            for i in range(24)
-        ]
-
-        # Pre-compute scores
-        for timestamp in time_points:
-            score = self.compute_temporal_score(
-                datetime.fromtimestamp(timestamp),
-                settings.temporal_decay_lambda
-            )
-            self.temporal_score_cache[timestamp] = score
-
-        print(f"✅ Updated {len(time_points)} temporal scores")
-
-    def get_cached_temporal_score(self, timestamp: datetime) -> float:
-        """Get temporal score from cache or compute on-demand."""
-        ts = timestamp.timestamp()
-
-        # Try exact match first
-        if ts in self.temporal_score_cache:
-            return self.temporal_score_cache[ts]
-
-        # Find closest cached score
-        closest_ts = min(
-            self.temporal_score_cache.keys(),
-            key=lambda x: abs(x - ts),
-            default=None
-        )
-
-        if closest_ts and abs(closest_ts - ts) < 1800:  # Within 30 minutes
-            return self.temporal_score_cache[closest_ts]
-
-        # Compute and cache new score
-        score = self.compute_temporal_score(timestamp, settings.temporal_decay_lambda)
-        self.temporal_score_cache[ts] = score
-        return score
-
-    def compute_temporal_score(self, timestamp: datetime, decay_lambda: float = 0.5) -> float:
-        """Compute temporal relevance score with exponential decay."""
-        if not timestamp:
-            return 0.0
-
-        time_diff_days = (datetime.utcnow() - timestamp).total_seconds() / 86400
-        return math.exp(-decay_lambda * time_diff_days)
-
-    def reciprocal_rank_fusion(
-        self,
-        result_lists: List[List[SearchResult]],
-        k: int = 60
-    ) -> List[SearchResult]:
-        """Perform Reciprocal Rank Fusion on multiple result lists."""
-        fused_scores = defaultdict(float)
-        result_map = {}
-
-        for result_list in result_lists:
-            for rank, result in enumerate(result_list, 1):
-                # Use content as key for deduplication
-                key = result.metadata.get('memory_id', result.content[:100])
-                fused_scores[key] += 1.0 / (k + rank)
-
-                # Keep the result object
-                if key not in result_map:
-                    result_map[key] = result
-
-        # Sort by fused score
-        sorted_results = sorted(
-            [(key, score) for key, score in fused_scores.items()],
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        # Return SearchResults with updated scores
-        final_results = []
-        for key, fused_score in sorted_results:
-            result = result_map[key]
-            result.score = fused_score
-            result.source = "hybrid"
-            final_results.append(result)
-
-        return final_results
-
-    async def hybrid_search(
-        self,
-        query: str,
-        user_id: str,
-        session_id: Optional[str] = None,
-        limit: int = 20
-    ) -> List[SearchResult]:
-        """Perform hybrid search combining lexical and semantic search."""
-        # Classify intent
-        intent = self.classify_intent(query)
-
-        # Parallel search
-        lexical_task = asyncio.create_task(
-            asyncio.to_thread(
-                self.tantivy_engine.search,
-                query, user_id, session_id, limit
-            )
-        )
-
-        semantic_task = self.vector_store.search_memories(
-            query, user_id, limit
-        )
-
-        # Wait for both searches
-        lexical_results, semantic_results = await asyncio.gather(
-            lexical_task, semantic_task
-        )
-
-        # Apply Reciprocal Rank Fusion
-        fused_results = self.reciprocal_rank_fusion(
-            [lexical_results, semantic_results],
-            k=settings.hybrid_search_k
-        )
-
-        # Apply temporal ranking based on intent (optimized with caching)
-        weights = self.intent_weights[intent]
-        for result in fused_results:
-            # Get timestamp from metadata
-            timestamp_str = result.metadata.get('created_at')
-            if timestamp_str:
-                timestamp = datetime.fromisoformat(timestamp_str)
-                # Use cached temporal score for better performance
-                temporal_score = self.get_cached_temporal_score(timestamp)
+            # Try integer
+            result[column] = int(value)
+        except ValueError:
+            try:
+                # Try float
+                result[column] = float(value)
+            except ValueError:
+                # Try boolean
+                if value.lower() in ['true', 'false']:
+                    result[column] = value.lower() == 'true'
+                else:
+                    # Keep as string
+                    result[column] = value
+
+    return result
+
+
+def print_results(result: SearchResult, verbose: bool = False):
+    """Print search results in a formatted way.
+
+    Args:
+        result: Search result object
+        verbose: Whether to print full documents
+    """
+    print("\n" + "=" * 80)
+    print("SEARCH RESULTS")
+    print("=" * 80)
+
+    print(f"\nStatus: {result.status}")
+    print(f"Total matches: {result.count}")
+    print(f"Time taken: {result.time_taken:.3f} seconds ({result.time_taken * 1000:.1f} ms)")
+
+    if result.results:
+        print(f"\nShowing top {len(result.results)} results:")
+        print("-" * 80)
+
+        for i, doc in enumerate(result.results, 1):
+            print(f"\nResult #{i}:")
+
+            if verbose:
+                # Print full document
+                for key, value in doc.items():
+                    if key.startswith('_'):
+                        continue  # Skip internal fields
+                    print(f"  {key}: {value}")
             else:
-                temporal_score = 0.5
+                # Print summary (selected fields only)
+                summary_fields = ['id', 'title', 'category', 'status', 'author', '_rrf_score']
+                for field in summary_fields:
+                    if field in doc:
+                        value = doc[field]
+                        if isinstance(value, str) and len(value) > 100:
+                            value = value[:97] + "..."
+                        print(f"  {field}: {value}")
 
-            # Combine relevance and temporal scores
-            importance = result.metadata.get('importance_score', 0.5)
-            final_score = (
-                weights["relevance"] * result.score +
-                weights["recency"] * temporal_score +
-                importance * 0.2  # Importance boost
-            )
-            result.score = final_score
+            if i < len(result.results):
+                print("-" * 40)
 
-        # Re-sort by final score
-        fused_results.sort(key=lambda x: x.score, reverse=True)
+    print("\n" + "=" * 80)
 
-        return fused_results[:limit]
 
-    async def add_memory_to_indices(self, memory: Memory):
-        """Add a memory to both search indices."""
-        # Add to vector store
-        await self.vector_store.add_memory(memory)
+def main():
+    """Main entry point for search interface."""
+    parser = argparse.ArgumentParser(description="Search engine interface")
 
-        # Add to Tantivy
-        self.tantivy_engine.add_document(
-            content=memory.content,
-            user_id=memory.user_id,
-            memory_id=memory.memory_id,
-            memory_type=memory.memory_type,
-            session_id=memory.source_session_id,
-            compressed_content=memory.compressed_content,
-            importance_score=memory.importance_score,
-            timestamp=memory.created_at
-        )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["dataframe", "keyword", "vector", "hybrid"],
+        required=True,
+        help="Search mode to use"
+    )
+    parser.add_argument(
+        "--index-path",
+        type=str,
+        default="data/index",
+        help="Path to index files"
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="Number of top results to return"
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print full document details"
+    )
+
+    # Mode-specific arguments
+    parser.add_argument(
+        "--column-value",
+        type=str,
+        nargs="+",
+        help="Column-value pairs for dataframe mode (format: column=value)"
+    )
+    parser.add_argument(
+        "--keywords",
+        type=str,
+        nargs="+",
+        help="Keywords for keyword search mode"
+    )
+    parser.add_argument(
+        "--vector-random",
+        action="store_true",
+        help="Use a random vector for vector search (for testing)"
+    )
+    parser.add_argument(
+        "--vector-file",
+        type=str,
+        help="Path to file containing vector (numpy array)"
+    )
+
+    args = parser.parse_args()
+
+    # Create configuration
+    config = SearchConfig(
+        index_path=args.index_path,
+        top_k=args.top_k
+    )
+
+    # Initialize search engine
+    print("Initializing search engine...")
+    engine = SearchEngine(config)
+
+    # Prepare search request
+    request_params = {
+        "mode": SearchMode(args.mode),
+        "top_k": args.top_k
+    }
+
+    # Add mode-specific parameters
+    if args.mode == "dataframe":
+        if not args.column_value:
+            parser.error("--column-value required for dataframe mode")
+        request_params["column_value_pairs"] = parse_column_value_pairs(args.column_value)
+
+    elif args.mode == "keyword":
+        if not args.keywords:
+            parser.error("--keywords required for keyword mode")
+        request_params["keywords"] = args.keywords
+
+    elif args.mode == "vector":
+        if args.vector_random:
+            # Generate random vector for testing
+            request_params["vector"] = np.random.randn(4096).tolist()
+        elif args.vector_file:
+            # Load vector from file
+            vector = np.load(args.vector_file)
+            request_params["vector"] = vector.tolist()
+        else:
+            parser.error("Either --vector-random or --vector-file required for vector mode")
+
+    elif args.mode == "hybrid":
+        # Hybrid mode can use any combination
+        if args.column_value:
+            request_params["column_value_pairs"] = parse_column_value_pairs(args.column_value)
+        if args.keywords:
+            request_params["keywords"] = args.keywords
+        if args.vector_random:
+            request_params["vector"] = np.random.randn(4096).tolist()
+        elif args.vector_file:
+            vector = np.load(args.vector_file)
+            request_params["vector"] = vector.tolist()
+
+        # Check at least one parameter is provided
+        if not any([args.column_value, args.keywords, args.vector_random, args.vector_file]):
+            parser.error("At least one search parameter required for hybrid mode")
+
+    # Create search request
+    request = SearchRequest(**request_params)
+
+    # Perform search
+    print(f"\nPerforming {args.mode} search...")
+    result = engine.search(request)
+
+    # Print results
+    print_results(result, verbose=args.verbose)
+
+
+if __name__ == "__main__":
+    main()
