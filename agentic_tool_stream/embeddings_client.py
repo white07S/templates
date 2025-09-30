@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import os
 import json
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
+# Removed ThreadPoolExecutor import - no longer needed for sequential processing
 import pickle
 from tqdm import tqdm
 import time
@@ -28,7 +28,8 @@ class EmbeddingsClient:
         cache_dir: str = "cache/embeddings",
         use_cache: bool = True,
         max_batch_size: int = 100,
-        max_workers: int = 4
+        max_workers: int = 1,  # Changed to sequential processing
+        batch_delay: float = 0.1  # Add delay between batches to avoid rate limits
     ):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.api_url = api_url or os.getenv("OPENAI_API_URL", "https://api.openai.com/v1")
@@ -38,6 +39,7 @@ class EmbeddingsClient:
         self.use_cache = use_cache
         self.max_batch_size = max_batch_size
         self.max_workers = max_workers
+        self.batch_delay = batch_delay
 
         # Initialize OpenAI client if available
         self.client = None
@@ -149,34 +151,34 @@ class EmbeddingsClient:
                 for i in range(0, len(uncached_texts), self.max_batch_size)
             ]
 
-            # Process batches
+            # Process batches sequentially
             if show_progress:
                 pbar = tqdm(total=len(uncached_texts), desc=desc)
 
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = []
-                for batch in batches:
-                    futures.append(executor.submit(self._get_openai_embedding, batch))
+            batch_idx = 0
+            for batch_num, batch in enumerate(batches):
+                # Add delay between batches (except for the first one)
+                if batch_num > 0 and self.batch_delay > 0:
+                    time.sleep(self.batch_delay)
 
-                batch_idx = 0
-                for future in futures:
-                    batch_embeddings = future.result()
-                    batch_size = len(batch_embeddings)
+                # Process batch sequentially
+                batch_embeddings = self._get_openai_embedding(batch)
+                batch_size = len(batch_embeddings)
 
-                    for i, embedding in enumerate(batch_embeddings):
-                        idx = uncached_indices[batch_idx + i]
-                        embeddings[idx] = embedding
+                for i, embedding in enumerate(batch_embeddings):
+                    idx = uncached_indices[batch_idx + i]
+                    embeddings[idx] = embedding
 
-                        # Update cache
-                        if self.use_cache:
-                            text = uncached_texts[batch_idx + i]
-                            cache_key = self._get_cache_key(text)
-                            self.cache[cache_key] = embedding
+                    # Update cache
+                    if self.use_cache:
+                        text = uncached_texts[batch_idx + i]
+                        cache_key = self._get_cache_key(text)
+                        self.cache[cache_key] = embedding
 
-                    batch_idx += batch_size
+                batch_idx += batch_size
 
-                    if show_progress:
-                        pbar.update(batch_size)
+                if show_progress:
+                    pbar.update(batch_size)
 
             if show_progress:
                 pbar.close()
