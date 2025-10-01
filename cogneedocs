@@ -1,11 +1,84 @@
-from sglang.test.doc_patch import launch_server_cmd
-from sglang.utils import wait_for_server, print_highlight, terminate_process
+# Advanced Search Engine Configuration
 
-embedding_process, port = launch_server_cmd(
-    """
-python3 -m sglang.launch_server --model-path Alibaba-NLP/gte-Qwen2-1.5B-instruct \
-    --host 0.0.0.0 --is-embedding --log-level warning
-"""
-)
+# ==========================================
+# Data and Index Paths
+# ==========================================
+# Path to the parquet data file
+DATA_PATH=mock_data_small.parquet
+# For full dataset (10M rows), use:
+# DATA_PATH=mock_data_full.parquet
 
-wait_for_server(f"http://localhost:{port}")
+# Path to store index files
+INDEX_PATH=./indices
+
+# ==========================================
+# Embedding Configuration
+# ==========================================
+# Columns to convert to embeddings (comma-separated)
+EMBEDDING_COLUMNS=title,description,content,article
+
+# Vector dimension for embeddings
+VECTOR_DIMENSION=4096
+
+# Use real embeddings (true) or random embeddings for testing (false)
+USE_REAL_EMBEDDINGS=false
+
+# ==========================================
+# OpenAI Configuration (for real embeddings)
+# ==========================================
+# OpenAI API key
+OPENAI_API_KEY=your-api-key-here
+
+# OpenAI API URL (for self-hosted models)
+# For vLLM: http://localhost:8000/v1
+OPENAI_API_URL=http://localhost:8000/v1
+
+# OpenAI model for embeddings
+# For OpenAI: text-embedding-3-large
+# For vLLM: your-embedding-model
+OPENAI_MODEL=text-embedding-3-large
+
+# ==========================================
+# Ingestion Settings
+# ==========================================
+# Force re-indexing (true/false)
+RE_INDEX=false
+
+# Chunk size for processing
+CHUNK_SIZE=1000
+
+# ==========================================
+# Benchmark Configuration
+# ==========================================
+# Number of queries per mode for benchmarking
+BENCHMARK_QUERIES=100
+
+# ==========================================
+# Search Configuration
+# ==========================================
+# Default number of results to return
+DEFAULT_TOP_K=5
+
+# Maximum query timeout in seconds
+QUERY_TIMEOUT=2.0
+
+# ==========================================
+# Performance Tuning
+# ==========================================
+# Number of parallel workers for hybrid search
+PARALLEL_WORKERS=3
+
+# DuckDB memory limit
+DUCKDB_MEMORY_LIMIT=4GB
+
+# Tantivy heap size in MB
+TANTIVY_HEAP_SIZE=100
+
+# ==========================================
+# Logging and Debug
+# ==========================================
+# Enable debug logging
+DEBUG=false
+
+# Log file path
+LOG_FILE=search_engine.log
