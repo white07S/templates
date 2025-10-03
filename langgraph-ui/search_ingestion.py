@@ -181,45 +181,50 @@ class FAISSIndexer:
         all_embeddings = []
         all_ids = []
         
-        for col in columns:
-            if col not in df.columns:
-                logger.warning(f"Column {col} not found in dataframe")
-                continue
-            
-            # Prepare texts for embedding
-            texts = []
-            doc_ids = []
-            
-            for idx, value in df[col].items():
-                cleaned = clean_text(handle_edge_cases(value))
-                if cleaned:  # Only process non-empty texts
-                    texts.append(cleaned)
-                    doc_ids.append(idx)
-            
-            if texts:
-                # Generate embeddings
-                logger.info(f"Generating embeddings for column: {col}")
-                embeddings = await self.embedding_client.get_embeddings(
-                    texts, 
-                    show_progress=show_progress
-                )
-                
-                # Store embeddings and IDs
-                all_embeddings.append(embeddings)
-                all_ids.extend(doc_ids)
+        # Process each row to create combined text from specified columns
+        texts = []
+        doc_ids = []
         
-        if all_embeddings:
-            # Combine all embeddings
-            combined_embeddings = np.vstack(all_embeddings).astype('float32')
+        for idx in df.index:
+            row = df.loc[idx]
+            combined_text_parts = []
+            
+            for col in columns:
+                if col not in df.columns:
+                    continue
+                    
+                value = row[col]
+                cleaned = clean_text(handle_edge_cases(value))
+                if cleaned:
+                    combined_text_parts.append(cleaned)
+            
+            # Only add if we have some text
+            if combined_text_parts:
+                combined_text = " ".join(combined_text_parts)
+                texts.append(combined_text)
+                doc_ids.append(idx)
+        
+        if texts:
+            # Generate embeddings
+            logger.info(f"Generating embeddings for {len(texts)} documents from columns: {columns}")
+            embeddings = await self.embedding_client.get_embeddings(
+                texts, 
+                show_progress=show_progress
+            )
+            
+            # Convert to float32 for FAISS
+            embeddings = embeddings.astype('float32')
             
             # Add to FAISS index
-            self.index.add(combined_embeddings)
+            self.index.add(embeddings)
             
-            # Update ID map
-            for i, doc_id in enumerate(all_ids):
-                self.id_map[len(self.id_map)] = doc_id
+            # Update ID map - map FAISS index position to document ID
+            start_idx = len(self.id_map)
+            for i, doc_id in enumerate(doc_ids):
+                self.id_map[start_idx + i] = int(doc_id)
             
-            logger.info(f"Added {len(combined_embeddings)} embeddings to FAISS index")
+            logger.info(f"Added {len(embeddings)} embeddings to FAISS index")
+            logger.info(f"ID map now contains {len(self.id_map)} mappings")
     
     def save(self):
         """Save FAISS index and metadata to disk."""
@@ -372,11 +377,30 @@ class DataIngestion:
         # Create index
         self.faiss_indexer.create_index()
         
+        # Determine columns to use for embeddings
+        columns_to_embed = SearchConfig.EMBEDDINGS_COLUMNS
+        
+        # Validate columns exist
+        valid_columns = []
+        for col in columns_to_embed:
+            if col in self.df.columns:
+                valid_columns.append(col)
+            else:
+                logger.warning(f"Column '{col}' not found in dataframe, skipping")
+        
+        if not valid_columns:
+            # If no valid columns specified, use all text columns
+            valid_columns = SearchConfig.get_search_columns(self.df)
+            if valid_columns:
+                logger.info(f"Using detected text columns for embeddings: {valid_columns[:5]}...")  # Show first 5
+            else:
+                logger.error("No text columns found for embedding generation")
+                return
+        
         # Add embeddings
         await self.faiss_indexer.add_embeddings(
-            self.df[SearchConfig.EMBEDDINGS_COLUMNS] if SearchConfig.EMBEDDINGS_COLUMNS 
-            else self.df,
-            SearchConfig.EMBEDDINGS_COLUMNS,
+            self.df,
+            valid_columns,
             show_progress=True
         )
         
