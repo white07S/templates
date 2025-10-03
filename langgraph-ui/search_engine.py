@@ -102,17 +102,20 @@ class TantivySearcher:
             # Parse and execute query
             try:
                 query = self.index.parse_query(final_query)
-                results = self.searcher.search(query, top_k)
+                results = self.searcher.search(query, top_k * 2)  # Get more results for better ranking
                 
                 # Process results
                 for score, doc_address in results.hits:
                     doc = self.searcher.doc(doc_address)
-                    doc_id = doc.get("doc_id")[0]  # Get document ID
-                    
-                    # Aggregate scores if document appears multiple times
-                    if doc_id not in all_results:
-                        all_results[doc_id] = 0
-                    all_results[doc_id] += score
+                    # Get document ID - it's stored as a list in tantivy
+                    doc_id_list = doc["doc_id"]
+                    if doc_id_list and len(doc_id_list) > 0:
+                        doc_id = doc_id_list[0]  # Get first element
+                        
+                        # Aggregate scores if document appears multiple times
+                        if doc_id not in all_results:
+                            all_results[doc_id] = 0
+                        all_results[doc_id] += score
                     
             except Exception as e:
                 logger.warning(f"Query failed for '{query_str}': {e}")
@@ -128,14 +131,21 @@ class TantivySearcher:
         return sorted_results
     
     def get_document(self, doc_id: int) -> Dict[str, Any]:
-        """Retrieve full document by ID."""
-        query = self.index.parse_query(f"doc_id:{doc_id}")
-        results = self.searcher.search(query, 1)
-        
-        if results.hits:
-            _, doc_address = results.hits[0]
-            doc = self.searcher.doc(doc_address)
-            return {field: doc.get(field) for field in doc}
+        """Retrieve full document by ID from Tantivy index."""
+        try:
+            query = self.index.parse_query(f"doc_id:{doc_id}")
+            results = self.searcher.search(query, 1)
+            
+            if results.hits:
+                _, doc_address = results.hits[0]
+                doc = self.searcher.doc(doc_address)
+                # Convert Tantivy document to dict
+                doc_dict = {}
+                for field_name in doc:
+                    doc_dict[field_name] = doc[field_name]
+                return doc_dict
+        except Exception as e:
+            logger.warning(f"Failed to retrieve document {doc_id}: {e}")
         return {}
 
 
@@ -165,6 +175,8 @@ class FAISSSearcher:
                 self.id_map = {int(k): v for k, v in json.load(f).items()}
         
         logger.info(f"Loaded FAISS index from {self.index_path}")
+        logger.info(f"FAISS index contains {self.index.ntotal} vectors")
+        logger.info(f"ID map contains {len(self.id_map)} mappings")
     
     async def initialize_embedding_client(self):
         """Initialize embedding client for query encoding."""
@@ -197,7 +209,8 @@ class FAISSSearcher:
         query_embedding = query_embedding.reshape(1, -1).astype('float32')
         
         # Search in FAISS
-        distances, indices = self.index.search(query_embedding, min(top_k, self.index.ntotal))
+        k = min(top_k, self.index.ntotal)
+        distances, indices = self.index.search(query_embedding, k)
         
         # Convert to doc IDs
         results = []
@@ -235,8 +248,34 @@ class SearchEngine:
     
     def load_data(self, data_path: str = SearchConfig.DATA_PATH):
         """Load original data for result retrieval."""
+        if not Path(data_path).exists():
+            logger.error(f"Data file not found: {data_path}")
+            return
+        
         self.df = pd.read_parquet(data_path)
-        logger.info(f"Loaded data with {len(self.df)} rows")
+        logger.info(f"Loaded data with {len(self.df)} rows and {len(self.df.columns)} columns")
+    
+    def _get_full_row(self, doc_id: int) -> Dict[str, Any]:
+        """Get full row data from dataframe."""
+        if self.df is None:
+            logger.warning("Data not loaded. Call load_data() first.")
+            return {}
+        
+        try:
+            if doc_id in self.df.index:
+                # Get the row as a dictionary
+                row_data = self.df.loc[doc_id].to_dict()
+                # Handle any NaN or None values
+                for key, value in row_data.items():
+                    if pd.isna(value):
+                        row_data[key] = None
+                return row_data
+            else:
+                logger.warning(f"Document ID {doc_id} not found in dataframe")
+                return {}
+        except Exception as e:
+            logger.error(f"Error retrieving row {doc_id}: {e}")
+            return {}
     
     def keyword_search(self, 
                       queries: Union[str, List[str]], 
@@ -251,10 +290,14 @@ class SearchEngine:
             fields: Specific fields to search in
         
         Returns:
-            List of result dictionaries with document data and scores
+            List of result dictionaries with complete row data and scores
         """
         if not self.tantivy_searcher:
-            raise ValueError("Tantivy index not available")
+            logger.error("Tantivy index not available")
+            return []
+        
+        if self.df is None:
+            self.load_data()
         
         start_time = time.time()
         
@@ -264,15 +307,16 @@ class SearchEngine:
         # Retrieve full documents
         output = []
         for doc_id, score in results:
-            if self.df is not None and doc_id in self.df.index:
-                doc_data = self.df.loc[doc_id].to_dict()
-                doc_data['_score'] = score
-                doc_data['_id'] = doc_id
-                doc_data['_search_type'] = 'keyword'
-                output.append(doc_data)
+            row_data = self._get_full_row(doc_id)
+            if row_data:
+                # Add metadata
+                row_data['_score'] = float(score)
+                row_data['_id'] = int(doc_id)
+                row_data['_search_type'] = 'keyword'
+                output.append(row_data)
         
         elapsed = time.time() - start_time
-        logger.info(f"Keyword search completed in {elapsed:.3f}s")
+        logger.info(f"Keyword search completed in {elapsed:.3f}s, found {len(output)} results")
         
         return output
     
@@ -287,10 +331,14 @@ class SearchEngine:
             top_k: Number of results to return
         
         Returns:
-            List of result dictionaries with document data and scores
+            List of result dictionaries with complete row data and scores
         """
         if not self.faiss_searcher:
-            raise ValueError("FAISS index not available")
+            logger.error("FAISS index not available")
+            return []
+        
+        if self.df is None:
+            self.load_data()
         
         start_time = time.time()
         
@@ -300,15 +348,16 @@ class SearchEngine:
         # Retrieve full documents
         output = []
         for doc_id, score in results:
-            if self.df is not None and doc_id in self.df.index:
-                doc_data = self.df.loc[doc_id].to_dict()
-                doc_data['_score'] = score
-                doc_data['_id'] = doc_id
-                doc_data['_search_type'] = 'semantic'
-                output.append(doc_data)
+            row_data = self._get_full_row(doc_id)
+            if row_data:
+                # Add metadata
+                row_data['_score'] = float(score)
+                row_data['_id'] = int(doc_id)
+                row_data['_search_type'] = 'semantic'
+                output.append(row_data)
         
         elapsed = time.time() - start_time
-        logger.info(f"Semantic search completed in {elapsed:.3f}s")
+        logger.info(f"Semantic search completed in {elapsed:.3f}s, found {len(output)} results")
         
         return output
     
@@ -327,10 +376,14 @@ class SearchEngine:
             semantic_weight: Weight for semantic search results
         
         Returns:
-            List of result dictionaries with document data and RRF scores
+            List of result dictionaries with complete row data and RRF scores
         """
         if not self.tantivy_searcher and not self.faiss_searcher:
-            raise ValueError("No search indices available")
+            logger.error("No search indices available")
+            return []
+        
+        if self.df is None:
+            self.load_data()
         
         start_time = time.time()
         
@@ -342,41 +395,52 @@ class SearchEngine:
         
         # Perform keyword search if available
         if self.tantivy_searcher:
-            keyword_results = self.tantivy_searcher.search(queries, None, top_k * 2)
-            if keyword_weight != 1.0:
-                # Apply weight
-                keyword_results = [(doc_id, score * keyword_weight) 
-                                  for doc_id, score in keyword_results]
-            all_rankings.append(keyword_results)
+            try:
+                keyword_results = self.tantivy_searcher.search(queries, None, top_k * 2)
+                if keyword_weight != 1.0:
+                    # Apply weight
+                    keyword_results = [(doc_id, score * keyword_weight) 
+                                      for doc_id, score in keyword_results]
+                all_rankings.append(keyword_results)
+                logger.info(f"Keyword search found {len(keyword_results)} results")
+            except Exception as e:
+                logger.error(f"Keyword search failed in hybrid: {e}")
         
         # Perform semantic search if available
         if self.faiss_searcher:
-            # Use first query for semantic search
-            semantic_results = await self.faiss_searcher.search(queries[0], top_k * 2)
-            if semantic_weight != 1.0:
-                # Apply weight
-                semantic_results = [(doc_id, score * semantic_weight) 
-                                   for doc_id, score in semantic_results]
-            all_rankings.append(semantic_results)
+            try:
+                # Use first query for semantic search
+                semantic_results = await self.faiss_searcher.search(queries[0], top_k * 2)
+                if semantic_weight != 1.0:
+                    # Apply weight
+                    semantic_results = [(doc_id, score * semantic_weight) 
+                                       for doc_id, score in semantic_results]
+                all_rankings.append(semantic_results)
+                logger.info(f"Semantic search found {len(semantic_results)} results")
+            except Exception as e:
+                logger.error(f"Semantic search failed in hybrid: {e}")
         
         # Apply RRF to combine results
         if len(all_rankings) > 1:
             combined_results = self.rrf_scorer.score(all_rankings)
+        elif len(all_rankings) == 1:
+            combined_results = all_rankings[0]
         else:
-            combined_results = all_rankings[0] if all_rankings else []
+            combined_results = []
         
         # Retrieve full documents for top_k results
         output = []
         for doc_id, rrf_score in combined_results[:top_k]:
-            if self.df is not None and doc_id in self.df.index:
-                doc_data = self.df.loc[doc_id].to_dict()
-                doc_data['_score'] = rrf_score
-                doc_data['_id'] = doc_id
-                doc_data['_search_type'] = 'hybrid'
-                output.append(doc_data)
+            row_data = self._get_full_row(doc_id)
+            if row_data:
+                # Add metadata
+                row_data['_score'] = float(rrf_score)
+                row_data['_id'] = int(doc_id)
+                row_data['_search_type'] = 'hybrid'
+                output.append(row_data)
         
         elapsed = time.time() - start_time
-        logger.info(f"Hybrid search completed in {elapsed:.3f}s")
+        logger.info(f"Hybrid search completed in {elapsed:.3f}s, found {len(output)} results")
         
         # Check if we met the performance target
         if elapsed > SearchConfig.SEARCH_TIMEOUT:
@@ -399,8 +463,12 @@ class SearchEngine:
             **kwargs: Additional arguments for specific search modes
         
         Returns:
-            List of result dictionaries
+            List of result dictionaries with complete row data
         """
+        # Ensure data is loaded
+        if self.df is None:
+            self.load_data()
+        
         if mode == "keyword":
             return self.keyword_search(query, top_k, **kwargs)
         elif mode == "semantic":
