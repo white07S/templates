@@ -1,0 +1,16 @@
+[project]
+name = "advanced-search-algorithm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "faiss-cpu>=1.12.0",
+    "openai>=2.1.0",
+    "pandas>=2.3.3",
+    "pyarrow>=21.0.0",
+    "python-dotenv>=1.1.1",
+    "tantivy>=0.25.0",
+    "tqdm>=4.67.1",
+]
