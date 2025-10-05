@@ -1,0 +1,409 @@
+# Troubleshooting Guide
+
+This guide covers common issues you might encounter and how to resolve them.
+
+## Installation Issues
+
+### Node.js Version Mismatch
+
+**Problem**: Error message saying "Node.js version X is not supported"
+
+**Solution**:
+```bash
+# Check your Node.js version
+node --version
+
+# If outdated, update Node.js
+# Using nvm (recommended)
+nvm install 16
+nvm use 16
+
+# Or download from nodejs.org
+```
+
+### Permission Denied Errors
+
+**Problem**: "EACCES: permission denied" when installing globally
+
+**Solution**:
+```bash
+# Option 1: Use npx instead of global install
+npx @our-product/cli init my-project
+
+# Option 2: Fix npm permissions
+mkdir ~/.npm-global
+npm config set prefix '~/.npm-global'
+echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# Option 3: Use a Node version manager
+# Install nvm and use it to manage Node/npm
+```
+
+### Behind Corporate Proxy
+
+**Problem**: Cannot download packages due to proxy
+
+**Solution**:
+```bash
+# Configure npm to use proxy
+npm config set proxy http://proxy.company.com:8080
+npm config set https-proxy http://proxy.company.com:8080
+
+# If authentication is required
+npm config set proxy http://username:password@proxy.company.com:8080
+```
+
+## Build Errors
+
+### Module Not Found
+
+**Problem**: "Cannot find module 'xyz'"
+
+**Solution**:
+```bash
+# Clear npm cache
+npm cache clean --force
+
+# Delete node_modules and reinstall
+rm -rf node_modules package-lock.json
+npm install
+
+# If specific module is missing
+npm install xyz
+```
+
+### Out of Memory
+
+**Problem**: "JavaScript heap out of memory"
+
+**Solution**:
+```bash
+# Increase Node.js memory limit
+export NODE_OPTIONS="--max-old-space-size=4096"
+
+# Or add to package.json scripts
+"scripts": {
+  "build": "node --max-old-space-size=4096 build.js"
+}
+```
+
+### Build Fails on Windows
+
+**Problem**: Build scripts fail on Windows
+
+**Solution**:
+```bash
+# Use cross-env for environment variables
+npm install --save-dev cross-env
+
+# Update package.json
+"scripts": {
+  "build": "cross-env NODE_ENV=production webpack"
+}
+
+# Or use Windows-compatible commands
+npm install --save-dev rimraf
+"clean": "rimraf dist"
+```
+
+## Runtime Errors
+
+### Port Already in Use
+
+**Problem**: "Port 3000 is already in use"
+
+**Solution**:
+```bash
+# Find process using the port
+# On macOS/Linux
+lsof -i :3000
+
+# On Windows
+netstat -ano | findstr :3000
+
+# Kill the process
+kill -9 <PID>
+
+# Or use a different port
+PORT=3001 npm start
+```
+
+### CORS Errors
+
+**Problem**: "Access blocked by CORS policy"
+
+**Solution**:
+```javascript
+// In your backend configuration
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true
+}));
+
+// Or for development, allow all origins
+app.use(cors());
+```
+
+### Database Connection Failed
+
+**Problem**: "Could not connect to database"
+
+**Solution**:
+```bash
+# Check if database is running
+# PostgreSQL
+pg_ctl status
+sudo service postgresql start
+
+# MongoDB
+mongod --version
+sudo service mongod start
+
+# MySQL
+mysql.server status
+mysql.server start
+
+# Verify connection details in config
+{
+  "database": {
+    "host": "localhost",  // Check this
+    "port": 5432,         // Check this
+    "username": "user",   // Check this
+    "password": "pass",   // Check this
+    "database": "mydb"    // Check this
+  }
+}
+```
+
+## Performance Issues
+
+### Slow Development Build
+
+**Problem**: Development server takes too long to start
+
+**Solution**:
+```javascript
+// webpack.config.js
+module.exports = {
+  // Use eval-source-map for faster rebuilds
+  devtool: 'eval-source-map',
+
+  // Exclude node_modules from watching
+  watchOptions: {
+    ignored: /node_modules/
+  },
+
+  // Increase polling interval
+  watchOptions: {
+    poll: 1000
+  }
+};
+```
+
+### Memory Leaks
+
+**Problem**: Application gradually uses more memory
+
+**Solution**:
+```javascript
+// Common causes and fixes
+
+// 1. Event listeners not removed
+componentDidMount() {
+  window.addEventListener('resize', this.handleResize);
+}
+
+componentWillUnmount() {
+  // Don't forget this!
+  window.removeEventListener('resize', this.handleResize);
+}
+
+// 2. Timers not cleared
+useEffect(() => {
+  const timer = setInterval(() => {
+    // ...
+  }, 1000);
+
+  // Clean up
+  return () => clearInterval(timer);
+}, []);
+
+// 3. Large objects in closure
+// Avoid this
+function processData() {
+  const hugeData = loadHugeData();
+  return function() {
+    // hugeData is kept in memory
+    console.log('Processing...');
+  };
+}
+
+// Do this instead
+function processData() {
+  const result = processHugeData(loadHugeData());
+  return function() {
+    console.log('Result:', result);
+  };
+}
+```
+
+## Testing Issues
+
+### Tests Failing Randomly
+
+**Problem**: Tests pass individually but fail when run together
+
+**Solution**:
+```javascript
+// Ensure proper cleanup between tests
+beforeEach(() => {
+  // Reset state
+  jest.clearAllMocks();
+});
+
+afterEach(() => {
+  // Clean up
+  cleanup();
+});
+
+// Use test isolation
+describe('MyComponent', () => {
+  let container;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    unmountComponentAtNode(container);
+    container.remove();
+  });
+});
+```
+
+### Timeout Errors
+
+**Problem**: "Timeout - Async callback was not invoked"
+
+**Solution**:
+```javascript
+// Increase timeout for slow operations
+test('slow operation', async () => {
+  // Increase timeout to 10 seconds
+  jest.setTimeout(10000);
+
+  const result = await slowOperation();
+  expect(result).toBe(expected);
+});
+
+// Or in configuration
+// jest.config.js
+module.exports = {
+  testTimeout: 10000
+};
+```
+
+## Deployment Issues
+
+### Build Works Locally but Fails in CI
+
+**Problem**: Build succeeds locally but fails in CI/CD pipeline
+
+**Solution**:
+```bash
+# Ensure consistent environment
+# 1. Lock dependencies
+npm ci  # Instead of npm install
+
+# 2. Check Node version
+# .nvmrc file
+16.14.0
+
+# 3. Set CI environment variable
+CI=true npm run build
+
+# 4. Clear cache in CI
+# In your CI config
+- run: npm cache clean --force
+```
+
+### Static Assets Not Loading
+
+**Problem**: Images/CSS/JS not loading after deployment
+
+**Solution**:
+```javascript
+// Check your public path configuration
+// webpack.config.js
+module.exports = {
+  output: {
+    publicPath: process.env.NODE_ENV === 'production'
+      ? 'https://cdn.example.com/'
+      : '/'
+  }
+};
+
+// For create-react-app, set homepage
+// package.json
+{
+  "homepage": "https://example.com/my-app"
+}
+```
+
+## Getting Help
+
+If you can't find a solution here:
+
+1. **Check the Documentation**: Review relevant sections in our docs
+2. **Search Issues**: Look through our [GitHub issues](https://github.com/our-product/issues)
+3. **Ask the Community**: Post in our [Discord server](https://discord.gg/example)
+4. **Contact Support**: Email support@example.com for critical issues
+
+### Providing Useful Information
+
+When reporting issues, include:
+
+```markdown
+## Environment
+- OS: [e.g., macOS 12.0]
+- Node version: [e.g., 16.14.0]
+- npm version: [e.g., 8.3.1]
+- Package version: [e.g., 2.1.0]
+
+## Steps to Reproduce
+1. Run command X
+2. Click button Y
+3. See error
+
+## Expected Behavior
+Description of what should happen
+
+## Actual Behavior
+Description of what actually happens
+
+## Error Messages
+```
+Paste full error message here
+```
+
+## Additional Context
+Any other relevant information
+```
+
+## Debug Mode
+
+Enable debug mode for more detailed error messages:
+
+```bash
+# Set debug environment variable
+DEBUG=* npm start
+
+# Or in your code
+if (process.env.NODE_ENV === 'development') {
+  enableDebugMode();
+}
+```
+
+Remember: Most issues have been encountered before. Don't hesitate to search for solutions or ask for help!

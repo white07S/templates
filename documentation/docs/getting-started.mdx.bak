@@ -1,0 +1,90 @@
+# Getting Started
+
+Welcome to our documentation system. This guide will help you get up and running quickly.
+
+> **Note**: This is a caution block. Make sure to follow these instructions carefully.
+
+## Installation
+
+To install the system, run the following command:
+
+```bash
+npm install documentation-system
+# or
+yarn add documentation-system
+```
+
+## Basic Setup
+
+Here's a simple example of how to set up the system:
+
+```javascript
+import DocumentationSystem from 'documentation-system';
+
+const docs = new DocumentationSystem({
+  baseUrl: 'https://api.example.com',
+  theme: 'light'
+});
+
+// Initialize the documentation
+docs.initialize();
+```
+
+## Mathematical Formulas
+
+Our system supports LaTeX mathematical expressions:
+
+When $a \ne 0$, there are two solutions to $ax^2 + bx + c = 0$ and they are:
+
+$$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$
+
+## Code Examples
+
+### Python Example
+
+```python
+def fibonacci(n):
+    """Calculate the nth Fibonacci number."""
+    if n <= 0:
+        return 0
+    elif n == 1:
+        return 1
+    else:
+        return fibonacci(n-1) + fibonacci(n-2)
+
+# Example usage
+print(fibonacci(10))  # Output: 55
+```
+
+### React Component
+
+```jsx
+import React, { useState } from 'react';
+
+const Counter = () => {
+  const [count, setCount] = useState(0);
+
+  return (
+    <div className="counter">
+      <h2>Count: {count}</h2>
+      <button onClick={() => setCount(count + 1)}>
+        Increment
+      </button>
+      <button onClick={() => setCount(count - 1)}>
+        Decrement
+      </button>
+    </div>
+  );
+};
+
+export default Counter;
+```
+
+## Next Steps
+
+Once you've completed the basic setup, you can move on to more advanced topics:
+
+1. **Configuration**: Learn about all configuration options
+2. **Theming**: Customize the look and feel
+3. **Extensions**: Add custom functionality
+4. **Deployment**: Deploy to production
