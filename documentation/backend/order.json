@@ -1,0 +1,52 @@
+{
+  "_comment": "Define custom ordering for documentation pages. Lower order values appear first.",
+  "order": [
+    {
+      "path": "getting-started",
+      "order": 1,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "installation.mdx", "order": 2},
+        {"path": "quick-start.mdx", "order": 3},
+        {"path": "configuration.mdx", "order": 4}
+      ]
+    },
+    {
+      "path": "guides",
+      "order": 2,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "basics.mdx", "order": 2},
+        {"path": "advanced.mdx", "order": 3},
+        {"path": "best-practices.mdx", "order": 4}
+      ]
+    },
+    {
+      "path": "api-reference",
+      "order": 3,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "authentication.mdx", "order": 2},
+        {"path": "endpoints.mdx", "order": 3},
+        {"path": "errors.mdx", "order": 4}
+      ]
+    },
+    {
+      "path": "examples",
+      "order": 4
+    },
+    {
+      "path": "troubleshooting",
+      "order": 5
+    },
+    {
+      "path": "changelog.mdx",
+      "order": 100
+    },
+    {
+      "path": "contributing.mdx",
+      "order": 101
+    }
+  ],
+  "defaultOrder": 999
+}
