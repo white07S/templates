@@ -262,14 +262,17 @@ class DocumentationService:
         logger.info(f"Successfully indexed {document_count} document sections")
 
     def get_navigation_structure(self) -> List[Dict[str, Any]]:
-        """Build navigation structure from file system"""
-        nav_items = []
+        """Build hierarchical navigation structure from file system"""
+        nav_structure = {}
 
-        # Get all MDX files and organize by directory
-        for mdx_file in sorted(self.docs_dir.glob("**/*.mdx")):
+        # Get all MDX files
+        mdx_files = list(self.docs_dir.glob("**/*.mdx"))
+
+        for mdx_file in sorted(mdx_files):
             relative_path = mdx_file.relative_to(self.docs_dir)
+            parts = relative_path.parts
 
-            # Extract title
+            # Extract title from file content
             with open(mdx_file, "r", encoding="utf-8") as f:
                 content = f.read()
                 lines = content.split("\n")
@@ -281,17 +284,86 @@ class DocumentationService:
 
             doc_id = str(relative_path).replace("/", "_").replace(".mdx", "")
 
-            # Create navigation item
-            nav_item = {
+            # Build hierarchical structure
+            current_level = nav_structure
+
+            # Process each directory level
+            for i, part in enumerate(parts[:-1]):  # All parts except the file
+                # Create directory entry if it doesn't exist
+                if part not in current_level:
+                    dir_id = "_".join(parts[:i+1])
+                    dir_title = part.replace("-", " ").title()
+
+                    # Check if there's an index.mdx file for this directory
+                    index_file = self.docs_dir / "/".join(parts[:i+1]) / "index.mdx"
+                    if index_file.exists():
+                        with open(index_file, "r", encoding="utf-8") as f:
+                            index_content = f.read()
+                            for line in index_content.split("\n"):
+                                if line.startswith("# "):
+                                    dir_title = line[2:].strip()
+                                    break
+
+                    current_level[part] = {
+                        "id": dir_id,
+                        "title": dir_title,
+                        "path": "/".join(parts[:i+1]),
+                        "is_directory": True,
+                        "children": {}
+                    }
+
+                current_level = current_level[part]["children"]
+
+            # Add the file to the appropriate level
+            file_name = parts[-1]
+
+            # Skip index.mdx files as they represent the parent directory
+            if file_name == "index.mdx":
+                # Update parent directory info with index content
+                parent_parts = parts[:-1]
+                if parent_parts:
+                    parent_level = nav_structure
+                    for part in parent_parts[:-1]:
+                        parent_level = parent_level[part]["children"]
+                    if parent_parts[-1] in parent_level:
+                        parent_level[parent_parts[-1]]["path"] = str(relative_path)
+                        parent_level[parent_parts[-1]]["title"] = title
+                        parent_level[parent_parts[-1]]["has_index"] = True
+                continue
+
+            current_level[file_name] = {
                 "id": doc_id,
                 "title": title,
                 "path": str(relative_path),
+                "is_directory": False,
                 "children": []
             }
 
-            nav_items.append(nav_item)
+        # Convert nested dict to list format
+        def dict_to_list(items_dict):
+            result = []
+            for key, item in sorted(items_dict.items()):
+                if item.get("is_directory"):
+                    # Directory with children
+                    children = dict_to_list(item["children"]) if item["children"] else []
+                    result.append({
+                        "id": item["id"],
+                        "title": item["title"],
+                        "path": item["path"],
+                        "children": children,
+                        "has_index": item.get("has_index", False)
+                    })
+                else:
+                    # Regular file
+                    result.append({
+                        "id": item["id"],
+                        "title": item["title"],
+                        "path": item["path"],
+                        "children": item.get("children", [])
+                    })
+            return result
 
-        return nav_items
+        return dict_to_list(nav_structure)
 
     def get_page_content(self, page_id: str) -> Optional[Dict[str, Any]]:
         """Get specific page content"""
@@ -468,12 +540,34 @@ class DocumentationService:
         return snippet
 
     def get_navigation_context(self, page_id: str) -> Dict[str, Any]:
-        """Get previous and next page for navigation"""
+        """Get previous and next page for navigation in hierarchical structure"""
         pages = self.get_navigation_structure()
+
+        # Flatten the hierarchical structure for navigation
+        def flatten_pages(items, result=None):
+            if result is None:
+                result = []
+
+            for item in items:
+                # Add the item if it has content (not just a directory without index)
+                if not item.get("is_directory") or item.get("has_index"):
+                    result.append({
+                        "id": item["id"],
+                        "title": item["title"],
+                        "path": item["path"]
+                    })
+
+                # Recursively add children
+                if item.get("children"):
+                    flatten_pages(item["children"], result)
+
+            return result
+
+        flat_pages = flatten_pages(pages)
 
         # Find current page index
         current_index = -1
-        for i, page in enumerate(pages):
+        for i, page in enumerate(flat_pages):
             if page["id"] == page_id:
                 current_index = i
                 break
@@ -481,13 +575,13 @@ class DocumentationService:
         if current_index == -1:
             return None
 
-        previous_page = pages[current_index - 1] if current_index > 0 else None
-        next_page = pages[current_index + 1] if current_index < len(pages) - 1 else None
+        previous_page = flat_pages[current_index - 1] if current_index > 0 else None
+        next_page = flat_pages[current_index + 1] if current_index < len(flat_pages) - 1 else None
 
         return {
             "previous": previous_page,
             "next": next_page,
-            "current": pages[current_index]
+            "current": flat_pages[current_index]
         }
 
     def get_health_status(self) -> Dict[str, Any]:
