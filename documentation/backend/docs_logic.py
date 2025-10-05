@@ -4,7 +4,7 @@ import hashlib
 import logging
 import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import tantivy
 
 # Set up logging
@@ -24,9 +24,43 @@ class DocumentationService:
 
         self.index_dir = Path(index_dir)
         self.schema_version_file = self.index_dir / "schema_version.json"
+        self.order_config_file = self.docs_dir / "order.json"
 
         self.index = None
         self.searcher = None
+        self.order_config = self.load_order_config()
+
+    def load_order_config(self) -> Dict[str, Any]:
+        """Load the page ordering configuration"""
+        if self.order_config_file.exists():
+            try:
+                with open(self.order_config_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load order config: {e}")
+        return {"order": [], "defaultOrder": 999}
+
+    def get_item_order(self, path: str, parent_path: str = "") -> Tuple[int, str]:
+        """Get the sort order for a given path"""
+        # Default order value
+        default_order = self.order_config.get("defaultOrder", 999)
+
+        # Build the full path relative to docs directory
+        full_path = path if not parent_path else f"{parent_path}/{path}"
+
+        # Look for the order in the configuration
+        for item in self.order_config.get("order", []):
+            if item.get("path") == full_path or item.get("path") == path:
+                return (item.get("order", default_order), path)
+
+            # Check children if this is a parent directory
+            if item.get("path") == parent_path:
+                for child in item.get("children", []):
+                    if child.get("path") == path:
+                        return (child.get("order", default_order), path)
+
+        # Return default order with path for secondary sorting
+        return (default_order, path)
 
     def create_schema(self):
         """Create the Tantivy schema"""
@@ -262,13 +296,27 @@ class DocumentationService:
         logger.info(f"Successfully indexed {document_count} document sections")
 
     def get_navigation_structure(self) -> List[Dict[str, Any]]:
-        """Build hierarchical navigation structure from file system"""
+        """Build hierarchical navigation structure from file system with custom ordering"""
         nav_structure = {}
 
         # Get all MDX files
         mdx_files = list(self.docs_dir.glob("**/*.mdx"))
 
-        for mdx_file in sorted(mdx_files):
+        # Sort files based on order configuration
+        def sort_key(file_path):
+            relative_path = file_path.relative_to(self.docs_dir)
+            parts = relative_path.parts
+
+            # Get order for the file or directory
+            if len(parts) == 1:
+                # Root level file
+                return self.get_item_order(parts[0])
+            else:
+                # File in a subdirectory
+                parent = "/".join(parts[:-1])
+                return self.get_item_order(parts[-1], parent)
+
+        for mdx_file in sorted(mdx_files, key=sort_key):
             relative_path = mdx_file.relative_to(self.docs_dir)
             parts = relative_path.parts
 
@@ -339,13 +387,19 @@ class DocumentationService:
                 "children": []
             }
 
-        # Convert nested dict to list format
-        def dict_to_list(items_dict):
+        # Convert nested dict to list format with custom ordering
+        def dict_to_list(items_dict, parent_path=""):
             result = []
-            for key, item in sorted(items_dict.items()):
+            # Sort items by order configuration
+            sorted_items = sorted(
+                items_dict.items(),
+                key=lambda x: self.get_item_order(x[0], parent_path)
+            )
+            for key, item in sorted_items:
                 if item.get("is_directory"):
-                    # Directory with children
-                    children = dict_to_list(item["children"]) if item["children"] else []
+                    # Directory with children - pass the current directory path
+                    current_path = f"{parent_path}/{key}" if parent_path else key
+                    children = dict_to_list(item["children"], current_path) if item["children"] else []
                     result.append({
                         "id": item["id"],
                         "title": item["title"],
