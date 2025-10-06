@@ -1,0 +1,257 @@
+# Performance Optimization
+
+Learn advanced techniques to optimize your application's performance.
+
+## Code Splitting
+
+Reduce initial bundle size with dynamic imports:
+
+```javascript
+// Before: Everything loaded at once
+import HeavyComponent from './HeavyComponent';
+
+// After: Load on demand
+const HeavyComponent = React.lazy(() => import('./HeavyComponent'));
+
+function App() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <HeavyComponent />
+    </Suspense>
+  );
+}
+```
+
+## Memoization
+
+Prevent unnecessary re-renders:
+
+```javascript
+// useMemo for expensive computations
+const expensiveValue = useMemo(() => {
+  return computeExpensiveValue(a, b);
+}, [a, b]);
+
+// React.memo for components
+const MyComponent = React.memo(({ data }) => {
+  return <div>{data}</div>;
+}, (prevProps, nextProps) => {
+  return prevProps.data === nextProps.data;
+});
+```
+
+## Virtual Scrolling
+
+Handle large lists efficiently:
+
+```javascript
+import { FixedSizeList } from 'react-window';
+
+function VirtualList({ items }) {
+  const Row = ({ index, style }) => (
+    <div style={style}>
+      {items[index]}
+    </div>
+  );
+
+  return (
+    <FixedSizeList
+      height={600}
+      itemCount={items.length}
+      itemSize={50}
+      width="100%"
+    >
+      {Row}
+    </FixedSizeList>
+  );
+}
+```
+
+## Image Optimization
+
+### Lazy Loading
+
+```javascript
+function LazyImage({ src, alt }) {
+  const [imageSrc, setImageSrc] = useState(placeholder);
+  const imgRef = useRef();
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            setImageSrc(src);
+            observer.unobserve(entry.target);
+          }
+        });
+      }
+    );
+
+    if (imgRef.current) {
+      observer.observe(imgRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [src]);
+
+  return <img ref={imgRef} src={imageSrc} alt={alt} />;
+}
+```
+
+### Responsive Images
+
+```html
+<picture>
+  <source
+    srcset="image-mobile.webp"
+    media="(max-width: 768px)"
+    type="image/webp"
+  />
+  <source
+    srcset="image-desktop.webp"
+    media="(min-width: 769px)"
+    type="image/webp"
+  />
+  <img src="image-fallback.jpg" alt="Description" />
+</picture>
+```
+
+## Bundle Optimization
+
+### Webpack Configuration
+
+```javascript
+module.exports = {
+  optimization: {
+    splitChunks: {
+      chunks: 'all',
+      cacheGroups: {
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name: 'vendors',
+          priority: 10
+        },
+        common: {
+          minChunks: 2,
+          priority: 5,
+          reuseExistingChunk: true
+        }
+      }
+    },
+    minimizer: [
+      new TerserPlugin({
+        terserOptions: {
+          compress: {
+            drop_console: true,
+          },
+        },
+      }),
+    ],
+  }
+};
+```
+
+## Caching Strategies
+
+### Service Worker
+
+```javascript
+// sw.js
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open('v1').then(cache => {
+      return cache.addAll([
+        '/',
+        '/styles/main.css',
+        '/scripts/app.js'
+      ]);
+    })
+  );
+});
+
+self.addEventListener('fetch', event => {
+  event.respondWith(
+    caches.match(event.request).then(response => {
+      return response || fetch(event.request);
+    })
+  );
+});
+```
+
+## Database Optimization
+
+### Query Optimization
+
+```javascript
+// Bad: N+1 queries
+const users = await User.findAll();
+for (const user of users) {
+  user.posts = await Post.findAll({ userId: user.id });
+}
+
+// Good: Single query with join
+const users = await User.findAll({
+  include: [{
+    model: Post,
+    as: 'posts'
+  }]
+});
+```
+
+### Indexing
+
+```sql
+-- Add indexes for frequently queried columns
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_posts_user_id ON posts(user_id);
+CREATE INDEX idx_posts_created_at ON posts(created_at DESC);
+```
+
+## Monitoring & Profiling
+
+### Performance Monitoring
+
+```javascript
+// Measure component render time
+function measurePerformance(WrappedComponent) {
+  return function MeasuredComponent(props) {
+    useEffect(() => {
+      const startTime = performance.now();
+
+      return () => {
+        const endTime = performance.now();
+        console.log(
+          `${WrappedComponent.name} render time:`,
+          endTime - startTime
+        );
+      };
+    });
+
+    return <WrappedComponent {...props} />;
+  };
+}
+```
+
+### Web Vitals
+
+```javascript
+import { getCLS, getFID, getFCP, getLCP, getTTFB } from 'web-vitals';
+
+getCLS(console.log);
+getFID(console.log);
+getFCP(console.log);
+getLCP(console.log);
+getTTFB(console.log);
+```
+
+## Best Practices
+
+1. **Measure First**: Always profile before optimizing
+2. **Optimize Critical Path**: Focus on above-the-fold content
+3. **Use CDN**: Serve static assets from edge locations
+4. **Enable Compression**: Use gzip/brotli for text assets
+5. **Minimize Reflows**: Batch DOM updates
+6. **Debounce Events**: Limit frequency of expensive operations
+
+Remember: Premature optimization is the root of all evil. Profile first, then optimize where it matters!

@@ -1,0 +1,39 @@
+{
+  "_comment": "Define custom ordering for documentation pages. Lower order values appear first.",
+  "order": [
+    {
+      "path": "getting-started",
+      "order": 1,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "installation.mdx", "order": 2}
+      ]
+    },
+    {
+      "path": "guides",
+      "order": 2,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "basics.mdx", "order": 2},
+        {"path": "advanced.mdx", "order": 3}
+      ]
+    },
+    {
+      "path": "advanced-features",
+      "order": 3,
+      "children": [
+        {"path": "index.mdx", "order": 1},
+        {"path": "performance.mdx", "order": 2}
+      ]
+    },
+    {
+      "path": "examples.mdx",
+      "order": 4
+    },
+    {
+      "path": "troubleshooting.mdx",
+      "order": 5
+    }
+  ],
+  "defaultOrder": 999
+}

@@ -1,0 +1,128 @@
+# Installation Guide
+
+This guide will walk you through the installation process for our platform on different operating systems.
+
+## System Requirements
+
+Before installing, ensure your system meets these minimum requirements:
+
+### Hardware Requirements
+- **CPU**: 2 GHz dual-core processor or better
+- **RAM**: 4 GB minimum (8 GB recommended)
+- **Storage**: 10 GB available disk space
+
+### Software Requirements
+- **Operating System**: Windows 10+, macOS 10.14+, or Ubuntu 18.04+
+- **Node.js**: Version 14.0.0 or higher
+- **npm**: Version 6.0.0 or higher
+
+## Installation Methods
+
+### Method 1: npm (Recommended)
+
+The easiest way to install is using npm:
+
+```bash
+# Install globally
+npm install -g @our-product/cli
+
+# Verify installation
+our-product --version
+```
+
+### Method 2: Yarn
+
+If you prefer using Yarn:
+
+```bash
+# Install globally
+yarn global add @our-product/cli
+
+# Verify installation
+our-product --version
+```
+
+### Method 3: Manual Installation
+
+For manual installation:
+
+1. Download the latest release from our [GitHub releases page](https://github.com/our-product/releases)
+2. Extract the archive to your desired location
+3. Add the binary to your PATH
+
+```bash
+# Example for Unix-like systems
+export PATH="$PATH:/path/to/our-product/bin"
+```
+
+## Platform-Specific Instructions
+
+### Windows
+
+On Windows, you might need to run PowerShell as Administrator:
+
+```powershell
+# Run as Administrator
+npm install -g @our-product/cli
+
+# If you encounter permission issues
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+### macOS
+
+On macOS, you might need to use sudo:
+
+```bash
+sudo npm install -g @our-product/cli
+```
+
+### Linux
+
+On Linux distributions:
+
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install nodejs npm
+sudo npm install -g @our-product/cli
+
+# Fedora
+sudo dnf install nodejs npm
+sudo npm install -g @our-product/cli
+```
+
+## Verifying Your Installation
+
+After installation, verify everything is working:
+
+```bash
+# Check version
+our-product --version
+
+# Run diagnostic
+our-product doctor
+
+# Create a test project
+our-product init test-project
+```
+
+## Updating
+
+To update to the latest version:
+
+```bash
+npm update -g @our-product/cli
+```
+
+## Uninstalling
+
+If you need to uninstall:
+
+```bash
+npm uninstall -g @our-product/cli
+```
+
+## Next Steps
+
+Now that you have successfully installed the platform, proceed to the [Configuration Guide](./configuration) to set up your development environment.
