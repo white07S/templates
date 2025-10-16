@@ -1,57 +1,55 @@
 #!/usr/bin/env bash
-# pg-local.sh — install & run PostgreSQL 16 locally from .deb files, no systemd
+# pg-local.sh — local PostgreSQL 16 from .debs, no systemd.
 # Usage:
-#   ./pg-local.sh setup          # download .debs, extract, initdb, configure
+#   ./pg-local.sh setup          # download (if possible), extract, initdb, configure
 #   ./pg-local.sh start          # start server
 #   ./pg-local.sh stop           # stop server
 #   ./pg-local.sh status         # status
 #   ./pg-local.sh psql           # open psql
-#   ./pg-local.sh print-python   # print Python test to ./test_pg.py
-#   ./pg-local.sh purge          # remove local install (keeps data unless -y)
+#   ./pg-local.sh print-python   # write ./test_pg.py (psycopg3 smoke test)
+#   ./pg-local.sh purge [-y]     # remove install (keeps data unless you rm it)
 
 set -euo pipefail
 
-# ----------- configurable (change if you want) -----------------
-PG_MAJOR=16
-PORT=${PORT:-54329}
-PREFIX=${PREFIX:-"$HOME/local/pg$PG_MAJOR"}   # where binaries/libs land
-DATADIR=${DATADIR:-"$HOME/data/pg$PG_MAJOR"}  # where cluster lives (persistent)
-LOGDIR="$PREFIX/log"
-PKGDIR="$PREFIX/pkg"
-# ---------------------------------------------------------------
+# ---------------- configurable defaults ----------------
+PG_MAJOR="${PG_MAJOR:-16}"
+PORT="${PORT:-54329}"
+# Accept only jammy (22.04) or noble (24.04); map "nobel" -> "noble"; ignore focal.
+_raw_codename="${CODENAME:-}"
+if [[ -z "${_raw_codename}" ]]; then
+  # Try to detect, but fall back to jammy if anything else is detected
+  if [[ -r /etc/os-release ]]; then
+    _raw_codename="$(. /etc/os-release; echo "${UBUNTU_CODENAME:-}")"
+  fi
+fi
+_raw_codename="${_raw_codename,,}"
+case "${_raw_codename}" in
+  noble|nobel) CODENAME="noble" ;;
+  jammy|"")    CODENAME="jammy" ;;
+  *)           CODENAME="jammy" ;;  # force to jammy to avoid focal/etc surprises
+esac
 
-CODENAME="$(. /etc/os-release; echo "${UBUNTU_CODENAME:-$(lsb_release -sc 2>/dev/null || echo jammy)}")"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
-mkdir -p "$LOGDIR" "$PKGDIR" "$DATADIR"
+PREFIX="${PREFIX:-"$HOME/local/pg$PG_MAJOR"}"      # install root (binaries/libs)
+DATADIR="${DATADIR:-"$HOME/data/pg$PG_MAJOR"}"     # persistent data dir
+PKGDIR="${PKGDIR:-"$PREFIX/pkg"}"                  # *.deb folder (MUST exist)
+LOGDIR="$PREFIX/log"
+# ------------------------------------------------------
 
-pg_urls() {
-  # Choose matching builds by codename + arch
-  # Server & client from PGDG pool:
-  local base_pg="https://download.postgresql.org/pub/repos/apt/pool/main/p/postgresql-${PG_MAJOR}"
-  local pkg_suffix=""
-  case "$CODENAME" in
-    jammy)  pkg_suffix="pgdg22.04+1" ;;
-    noble)  pkg_suffix="pgdg24.04+1" ;;
-    *)      echo "Unsupported codename '$CODENAME'. Set CODENAME env to jammy or noble." >&2; exit 2 ;;
-  esac
+need_cmd() { command -v "$1" >/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
 
-  local srv="${base_pg}/postgresql-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
-  local cli="${base_pg}/postgresql-client-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-  # libpq5 from Ubuntu security (fits the OS libc/ssl); version depends on series:
-  local libpq=""
-  if [[ "$CODENAME" == "noble" ]]; then
-    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-16/libpq5_16.10-0ubuntu0.24.04.1_${ARCH}.deb"
-  else
-    # jammy
-    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-14/libpq5_14.19-0ubuntu0.22.04.1_${ARCH}.deb"
-  fi
-
-  printf "%s\n%s\n%s\n" "$srv" "$cli" "$libpq"
-}
-
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
+mkdir -p "$LOGDIR" || true
+# Per your requirement: if PKGDIR doesn't exist, STOP immediately.
+if [[ ! -d "$PKGDIR" ]]; then
+  echo "Package directory does not exist: $PKGDIR"
+  echo "Create/mount it first, then rerun. Example:"
+  echo "  mkdir -p \"$PKGDIR\""
+  exit 3
+fi
+mkdir -p "$DATADIR" || true
 
 export_vars() {
   export PG_PREFIX="$PREFIX"
@@ -67,29 +65,86 @@ export_vars() {
   export PATH="$PG_BIN:$PATH"
 }
 
-download() {
+# Build the list of direct URLs we require.
+# - Server & Client from PGDG (pinned to 16.10 build series for stability)
+# - libpq5 from Ubuntu security repo matching the series (jammy/noble)
+pg_urls() {
+  local base_pg="https://download.postgresql.org/pub/repos/apt/pool/main/p/postgresql-${PG_MAJOR}"
+  local pkg_suffix=""
+  case "$CODENAME" in
+    jammy) pkg_suffix="pgdg22.04+1" ;;
+    noble) pkg_suffix="pgdg24.04+1" ;;
+    *)     pkg_suffix="pgdg22.04+1" ;; # safe default
+  esac
+
+  # Versions pinned – adjust here if PGDG bumps:
+  local srv="${base_pg}/postgresql-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
+  local cli="${base_pg}/postgresql-client-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
+
+  # Series-matched libpq5 (version differs by series):
+  local libpq=""
+  if [[ "$CODENAME" == "noble" ]]; then
+    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-16/libpq5_16.10-0ubuntu0.24.04.1_${ARCH}.deb"
+  else
+    # jammy
+    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-14/libpq5_14.19-0ubuntu0.22.04.1_${ARCH}.deb"
+  fi
+
+  # Print the required list (one per line)
+  printf "%s\n%s\n%s\n" "$srv" "$cli" "$libpq"
+}
+
+# Attempt to download all URLs. On ANY curl error (esp. SSL), print the URL list and exit.
+download_pkgs() {
   need_cmd curl
-  echo ">>> Downloading .debs to $PKGDIR (codename=$CODENAME arch=$ARCH)"
-  pg_urls | while read -r url; do
-    fn="$PKGDIR/$(basename "$url")"
-    if [[ ! -f "$fn" ]]; then
-      echo "  - $url"
-      curl -fL --retry 3 -o "$fn.partial" "$url"
-      mv "$fn.partial" "$fn"
-    else
+  echo ">>> Target series: $CODENAME  arch: $ARCH"
+  echo ">>> Downloading into: $PKGDIR"
+  local urls=()
+  mapfile -t urls < <(pg_urls)
+
+  local had_error=0
+  for url in "${urls[@]}"; do
+    local fn="$PKGDIR/$(basename "$url")"
+    if [[ -f "$fn" ]]; then
       echo "  - exists: $(basename "$fn")"
+      continue
     fi
+    echo "  - fetching: $url"
+    if ! curl -fL --retry 2 -o "$fn.partial" "$url"; then
+      had_error=1
+      rm -f "$fn.partial" || true
+      break
+    fi
+    mv "$fn.partial" "$fn"
   done
+
+  if [[ $had_error -ne 0 ]]; then
+    echo
+    echo "!!! Download failed (possible SSL/cert or network issue)."
+    echo ">>> Please MANUALLY download the following URLs and place the .deb files into:"
+    echo "    $PKGDIR"
+    echo "----- REQUIRED URLS START -----"
+    printf "%s\n" "${urls[@]}"
+    echo "----- REQUIRED URLS END -----"
+    echo
+    echo "Then rerun: $0 setup"
+    exit 4
+  fi
 }
 
 extract_pkgs() {
   need_cmd dpkg-deb
-  echo ">>> Extracting packages into $PREFIX"
+  echo ">>> Extracting .deb packages into: $PREFIX"
   shopt -s nullglob
+  local count=0
   for deb in "$PKGDIR"/*.deb; do
-    echo "  - $(basename "$deb")"
+    echo "  - extracting: $(basename "$deb")"
     dpkg-deb -x "$deb" "$PREFIX"
+    ((count++)) || true
   done
+  if [[ $count -eq 0 ]]; then
+    die "No .deb files found in $PKGDIR. Place them there and rerun."
+  fi
 }
 
 init_db() {
@@ -100,12 +155,14 @@ init_db() {
   fi
   echo ">>> initdb at $PGDATA"
   mkdir -p "$PGDATA"
-  DBUSER="${USER:-$(id -un)}"
+  local DBUSER="${USER:-$(id -un)}"
   "$PG_BIN/initdb" -D "$PGDATA" -U "$DBUSER" --encoding=UTF8 --locale=C --data-checksums
+
   # Basic config: localhost only + custom port
   sed -i "s/^#\?port = .*/port = ${PORT}/" "$PGDATA/postgresql.conf"
   sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
-  # Local trust for convenience (dev only)
+
+  # Local trust for dev convenience (switch to md5/scram for auth if needed)
   {
     echo ""
     echo "# added by pg-local.sh"
@@ -159,25 +216,53 @@ PY
 }
 
 purge() {
-  echo ">>> This will delete $PREFIX. Data dir: $DATADIR (kept). Continue? (y/N)"
+  echo ">>> This will DELETE install dir: $PREFIX"
+  echo "    Data dir (PGDATA) is at: $DATADIR  (NOT removed by this command)"
   if [[ "${1:-}" != "-y" ]]; then
-    read -r ans; [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
+    read -r -p "Continue? (y/N) " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
   fi
   rm -rf "$PREFIX"
-  echo ">>> Removed $PREFIX. You can remove data with: rm -rf '$DATADIR'"
+  echo ">>> Removed $PREFIX. To remove data:"
+  echo "    rm -rf '$DATADIR'"
 }
 
 setup_all() {
-  download
+  echo ">>> Series: $CODENAME  Arch: $ARCH"
+  echo ">>> Install prefix: $PREFIX"
+  echo ">>> Package dir:    $PKGDIR"
+  echo ">>> Data dir:       $DATADIR"
+  # If .debs already present, skip download; else attempt download.
+  shopt -s nullglob
+  debs=("$PKGDIR"/*.deb)
+  if [[ ${#debs[@]} -eq 0 ]]; then
+    echo ">>> No .debs found—attempting download..."
+    if command -v curl >/null 2>&1; then
+      download_pkgs
+    else
+      echo "curl not available to download."
+      echo ">>> Please manually download the following URLs into $PKGDIR :"
+      echo "----- REQUIRED URLS START -----"
+      pg_urls
+      echo "----- REQUIRED URLS END -----"
+      exit 5
+    fi
+  else
+    echo ">>> Found existing .debs in $PKGDIR — using them"
+  fi
+
   extract_pkgs
   export_vars
-  # quick dependency hint if something is missing
-  if ! ldd "$PG_BIN/postgres" | grep -q "not found"; then
-    :
-  else
-    echo "!!! Some shared libs are missing on your system (see ldd output above)."
-    echo "    Install the missing system libs (e.g., libreadline8, libssl3, zlib1g, libicu) via apt, or download their .deb and extract into $PREFIX/usr/lib/*-linux-gnu."
+
+  # Quick missing-lib hint (does not resolve automatically)
+  if ldd "$PG_BIN/postgres" | grep -q "not found"; then
+    echo "!!! Some shared libraries are missing. ldd output:"
+    ldd "$PG_BIN/postgres" | grep "not found" || true
+    echo "Install missing libs system-wide OR download matching .deb files and extract into:"
+    echo "  $PREFIX/usr/lib/*-linux-gnu"
+    echo "Examples (series-specific): libicu, libreadline8, libssl3, zlib1g"
   fi
+
   init_db
   echo ">>> Setup complete."
   echo ">>> Start server with: $0 start"
@@ -195,7 +280,11 @@ case "${1:-}" in
   *)
     cat <<EOF
 Usage: $0 {setup|start|stop|status|psql|print-python|purge [-y]}
-Env vars: PREFIX='$PREFIX' DATADIR='$DATADIR' PORT='$PORT'
+Env:   CODENAME=[jammy|noble] (default: auto -> jammy/noble else jammy)
+       PREFIX='$PREFIX'
+       DATADIR='$DATADIR'
+       PKGDIR='$PKGDIR'   (MUST exist; script stops if missing)
+       PORT='$PORT'
 EOF
     exit 1
     ;;
