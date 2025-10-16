@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-pg-from-source.sh
-# Build & run PostgreSQL 16.1 from local source tarball (no systemd).
+# Build & run PostgreSQL 16.1 from a LOCAL source tarball (no systemd, no network).
 #
 # Prereqs (dev packages):
 #   Debian/Ubuntu: sudo apt install build-essential gcc make zlib1g-dev libreadline-dev libicu-dev libssl-dev pkg-config
@@ -16,13 +16,14 @@
 #   ./build-pg-from-source.sh purge [-y]     # remove install dir (keeps data)
 #
 # Override defaults (optional):
-#   PREFIX=/opt/pgsql-16.1 DATADIR=/pgdatabase/data PORT=54329 ./build-pg-from-source.sh setup
+#   TARBALL=/mnt/binary/postgresql-16.1.tar.gz PREFIX=/opt/pgsql-16.1 DATADIR=/pgdatabase/data PORT=5432 ./build-pg-from-source.sh setup
 
 set -euo pipefail
 
 # --------- CONFIGURABLE DEFAULTS ----------
-TARBALL="${TARBALL:-/mnt/binary/postgresql-16.1.tar.bz2}"   # REQUIRED local tarball path
-PG_VERSION="${PG_VERSION:-16.1}"                             # source version (for info only)
+# Your local tarball path (defaults to .tar.gz, per your file)
+TARBALL="${TARBALL:-/mnt/binary/postgresql-16.1.tar.gz}"
+PG_VERSION="${PG_VERSION:-16.1}"                             # for info/messages
 PORT="${PORT:-54329}"
 
 # Install prefix (no sudo needed if under $HOME)
@@ -52,31 +53,59 @@ Missing source tarball:
   $TARBALL
 
 Place the file here first (no network downloads are attempted by this script).
-Example (already given by you):
-  https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.bz2  ->  $TARBALL
+Example upstream file you mentioned:
+  https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.gz  ->  $TARBALL
 EOF
     exit 3
   fi
 }
 
-extract_source() {
+detect_extract() {
+  # Detect compression by MIME or extension and extract to $BUILDROOT.
   mkdir -p "$BUILDROOT"
   echo ">>> Extracting $TARBALL -> $BUILDROOT"
-  # Clean any previous source dir of same version
+
+  # Clean any prior same-version source dir to avoid confusion
   rm -rf "$SRCDIR"
-  tar -xf "$TARBALL" -C "$BUILDROOT"
+
+  local mime=""
+  if command -v file >/dev/null 2>&1; then
+    mime="$(file -b --mime-type "$TARBALL" || true)"
+  fi
+
+  # Prefer MIME if available; otherwise fall back to extension
+  case "$mime" in
+    application/x-gzip)   tar -xzf "$TARBALL" -C "$BUILDROOT" ;;
+    application/x-bzip2)  tar -xjf "$TARBALL" -C "$BUILDROOT" ;;
+    application/x-xz)     tar -xJf "$TARBALL" -C "$BUILDROOT" ;;
+    application/zstd|application/x-zstd)
+                          tar --zstd -xf "$TARBALL" -C "$BUILDROOT" ;;
+    application/x-tar)    tar -xf "$TARBALL" -C "$BUILDROOT" ;;
+    ""|*)                 # fallback by extension
+                          case "$TARBALL" in
+                            *.tar.gz|*.tgz)  tar -xzf "$TARBALL" -C "$BUILDROOT" ;;
+                            *.tar.bz2|*.tbz|*.tbz2) tar -xjf "$TARBALL" -C "$BUILDROOT" ;;
+                            *.tar.xz)        tar -xJf "$TARBALL" -C "$BUILDROOT" ;;
+                            *.tar.zst)       tar --zstd -xf "$TARBALL" -C "$BUILDROOT" ;;
+                            *.tar)           tar -xf "$TARBALL" -C "$BUILDROOT" ;;
+                            *)               echo "Unknown archive format for: $TARBALL"; echo "Trying plain tar -xf ..."; tar -xf "$TARBALL" -C "$BUILDROOT" ;;
+                          esac
+                          ;;
+  esac
+
   [[ -d "$SRCDIR" ]] || die "Expected source dir not found: $SRCDIR"
 }
 
 configure_build() {
   need_cmd gcc
   need_cmd make
-  need_cmd pkg-config || true   # helpful but not mandatory
+  need_cmd awk
+  need_cmd sed
+  need_cmd grep
   mkdir -p "$PREFIX" "$DATADIR" "$LOGDIR"
 
   echo ">>> Configuring PostgreSQL $PG_VERSION"
   cd "$SRCDIR"
-  # Common useful flags; configure will auto-disable missing features
   ./configure \
     --prefix="$PREFIX" \
     --with-openssl \
@@ -182,7 +211,7 @@ setup_all() {
   echo ">>> Port:     $PORT"
 
   check_tarball
-  extract_source
+  detect_extract
   configure_build
   compile_install
   init_db
@@ -205,21 +234,25 @@ case "${1:-}" in
     cat <<EOF
 Usage: $0 {setup|start|stop|status|psql|print-python|purge [-y]}
 Env:
-  TARBALL="$TARBALL"   # REQUIRED local source tarball path
-  PREFIX="$PREFIX"     # install dir (bin/lib/share under here)
-  DATADIR="$DATADIR"   # persistent cluster data dir
-  PORT="$PORT"         # server port
-  BUILDROOT="$BUILDROOT" # temp build location
+  TARBALL="$TARBALL"       # local source tarball path (.tar.gz, .tar.bz2, .tar.xz, .tar.zst, .tar)
+  PREFIX="$PREFIX"         # install dir (bin/lib/share under here)
+  DATADIR="$DATADIR"       # persistent cluster data dir
+  PORT="$PORT"             # server port
+  BUILDROOT="$BUILDROOT"   # temp build location
 
 Examples:
-  PREFIX=\$HOME/local/pgsql-16.1 DATADIR=\$HOME/data/pgsql-16.1 PORT=54329 $0 setup
+  TARBALL=/mnt/binary/postgresql-16.1.tar.gz \\
+  PREFIX=\$HOME/local/pgsql-16.1 \\
+  DATADIR=\$HOME/data/pgsql-16.1 \\
+  PORT=54329 \\
+  $0 setup
+
+Then:
   $0 start && $0 psql
 EOF
     exit 1
     ;;
 esac
-
-
 
 
 
