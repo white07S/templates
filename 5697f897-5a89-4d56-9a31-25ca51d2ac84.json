@@ -1,153 +1,147 @@
-Got it. Here’s a crisp, copy-pasteable, systemd-free PostgreSQL setup using .deb packages, installed into your own folders, with a Python smoke test.
+#!/usr/bin/env bash
+# pg-local.sh — install & run PostgreSQL 16 locally from .deb files, no systemd
+# Usage:
+#   ./pg-local.sh setup          # download .debs, extract, initdb, configure
+#   ./pg-local.sh start          # start server
+#   ./pg-local.sh stop           # stop server
+#   ./pg-local.sh status         # status
+#   ./pg-local.sh psql           # open psql
+#   ./pg-local.sh print-python   # print Python test to ./test_pg.py
+#   ./pg-local.sh purge          # remove local install (keeps data unless -y)
 
-⸻
+set -euo pipefail
 
-0) Assumptions
-	•	Debian/Ubuntu host (x86_64 or arm64).
-	•	You want PostgreSQL 16 (adjust to 15/17 similarly).
-	•	You’ll keep everything under ~/local/pg16 (binaries) and ~/data/pg16 (data).
+# ----------- configurable (change if you want) -----------------
+PG_MAJOR=16
+PORT=${PORT:-54329}
+PREFIX=${PREFIX:-"$HOME/local/pg$PG_MAJOR"}   # where binaries/libs land
+DATADIR=${DATADIR:-"$HOME/data/pg$PG_MAJOR"}  # where cluster lives (persistent)
+LOGDIR="$PREFIX/log"
+PKGDIR="$PREFIX/pkg"
+# ---------------------------------------------------------------
 
-Tip: If you’re offline, download the .deb files on a machine with internet and move them over, then start from step 2.
+CODENAME="$(. /etc/os-release; echo "${UBUNTU_CODENAME:-$(lsb_release -sc 2>/dev/null || echo jammy)}")"
+ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
-⸻
+mkdir -p "$LOGDIR" "$PKGDIR" "$DATADIR"
 
-1) Create folders
+pg_urls() {
+  # Choose matching builds by codename + arch
+  # Server & client from PGDG pool:
+  local base_pg="https://download.postgresql.org/pub/repos/apt/pool/main/p/postgresql-${PG_MAJOR}"
+  local pkg_suffix=""
+  case "$CODENAME" in
+    jammy)  pkg_suffix="pgdg22.04+1" ;;
+    noble)  pkg_suffix="pgdg24.04+1" ;;
+    *)      echo "Unsupported codename '$CODENAME'. Set CODENAME env to jammy or noble." >&2; exit 2 ;;
+  esac
 
-mkdir -p ~/local/pg16/{pkg,log} ~/data/pg16
+  local srv="${base_pg}/postgresql-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
+  local cli="${base_pg}/postgresql-client-${PG_MAJOR}_16.10-1.${pkg_suffix}_${ARCH}.deb"
 
+  # libpq5 from Ubuntu security (fits the OS libc/ssl); version depends on series:
+  local libpq=""
+  if [[ "$CODENAME" == "noble" ]]; then
+    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-16/libpq5_16.10-0ubuntu0.24.04.1_${ARCH}.deb"
+  else
+    # jammy
+    libpq="https://security.ubuntu.com/ubuntu/pool/main/p/postgresql-14/libpq5_14.19-0ubuntu0.22.04.1_${ARCH}.deb"
+  fi
 
-⸻
+  printf "%s\n%s\n%s\n" "$srv" "$cli" "$libpq"
+}
 
-2) Download the needed .deb packages (once)
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
 
-These are the server + client and the runtime shared libs they depend on. Exact lib package versions vary by distro; the generic names below work on current Ubuntu/Debian.
+export_vars() {
+  export PG_PREFIX="$PREFIX"
+  export PG_HOME="$PG_PREFIX/usr/lib/postgresql/${PG_MAJOR}"
+  export PG_BIN="$PG_HOME/bin"
+  export PG_SHARE="$PG_PREFIX/usr/share/postgresql/${PG_MAJOR}"
+  export PGDATA="$DATADIR"
+  if [[ -d "$PG_PREFIX/usr/lib/x86_64-linux-gnu" ]]; then
+    export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  elif [[ -d "$PG_PREFIX/usr/lib/aarch64-linux-gnu" ]]; then
+    export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  fi
+  export PATH="$PG_BIN:$PATH"
+}
 
-cd ~/local/pg16/pkg
+download() {
+  need_cmd curl
+  echo ">>> Downloading .debs to $PKGDIR (codename=$CODENAME arch=$ARCH)"
+  pg_urls | while read -r url; do
+    fn="$PKGDIR/$(basename "$url")"
+    if [[ ! -f "$fn" ]]; then
+      echo "  - $url"
+      curl -fL --retry 3 -o "$fn.partial" "$url"
+      mv "$fn.partial" "$fn"
+    else
+      echo "  - exists: $(basename "$fn")"
+    fi
+  done
+}
 
-# Core packages
-apt-get download \
-  postgresql-16 \
-  postgresql-client-16 \
-  postgresql-common \
-  libpq5
+extract_pkgs() {
+  need_cmd dpkg-deb
+  echo ">>> Extracting packages into $PREFIX"
+  shopt -s nullglob
+  for deb in "$PKGDIR"/*.deb; do
+    echo "  - $(basename "$deb")"
+    dpkg-deb -x "$deb" "$PREFIX"
+  done
+}
 
-# Likely shared-lib deps (adjust if your distro uses different names)
-apt-get download \
-  libreadline8 \
-  libedit2 \
-  libssl3 \
-  zlib1g
+init_db() {
+  export_vars
+  if [[ -s "$PGDATA/PG_VERSION" ]]; then
+    echo ">>> PGDATA already initialized at $PGDATA"
+    return
+  fi
+  echo ">>> initdb at $PGDATA"
+  mkdir -p "$PGDATA"
+  DBUSER="${USER:-$(id -un)}"
+  "$PG_BIN/initdb" -D "$PGDATA" -U "$DBUSER" --encoding=UTF8 --locale=C --data-checksums
+  # Basic config: localhost only + custom port
+  sed -i "s/^#\?port = .*/port = ${PORT}/" "$PGDATA/postgresql.conf"
+  sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
+  # Local trust for convenience (dev only)
+  {
+    echo ""
+    echo "# added by pg-local.sh"
+    echo "local   all   all                 trust"
+    echo "host    all   all  127.0.0.1/32  trust"
+  } >> "$PGDATA/pg_hba.conf"
+}
 
-# On some distros you may also need ICU (version varies, e.g., libicu70/libicu72)
-# apt-get download libicu70 || apt-get download libicu72 || true
+start_pg() {
+  export_vars
+  echo ">>> Starting PostgreSQL (port $PORT)"
+  "$PG_BIN/pg_ctl" -D "$PGDATA" -l "$LOGDIR/server.log" start
+}
 
-If you’re fully offline now, just place all those .deb files into ~/local/pg16/pkg/.
+stop_pg() {
+  export_vars
+  echo ">>> Stopping PostgreSQL"
+  "$PG_BIN/pg_ctl" -D "$PGDATA" stop -m fast
+}
 
-⸻
+status_pg() {
+  export_vars
+  "$PG_BIN/pg_ctl" -D "$PGDATA" status || true
+}
 
-3) Extract the .deb files without installing system-wide
+psql_pg() {
+  export_vars
+  exec "$PG_BIN/psql" -p "$PORT" -d postgres
+}
 
-cd ~/local/pg16/pkg
-for f in *.deb; do
-  dpkg-deb -x "$f" ..
-done
-
-This unpacks under ~/local/pg16/usr/... (no root, no system install).
-
-⸻
-
-4) Environment variables for your local Postgres
-
-# --- put these into your shell rc (~/.bashrc) if you like ---
-export PG_PREFIX="$HOME/local/pg16"
-export PG_HOME="$PG_PREFIX/usr/lib/postgresql/16"
-export PG_BIN="$PG_HOME/bin"
-export PG_SHARE="$PG_PREFIX/usr/share/postgresql/16"
-export PGDATA="$HOME/data/pg16"
-# adjust arch dir if arm64 vs x86_64
-if [ -d "$PG_PREFIX/usr/lib/x86_64-linux-gnu" ]; then
-  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
-elif [ -d "$PG_PREFIX/usr/lib/aarch64-linux-gnu" ]; then
-  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
-fi
-export PATH="$PG_BIN:$PATH"
-
-Reload your shell or run the block once in the current shell.
-
-⸻
-
-5) Initialize the data directory (no systemctl)
-
-# Choose a DB superuser name (your Linux user is fine)
-DB_SUPERUSER="$(whoami)"
-
-# Initialize cluster
-initdb -D "$PGDATA" -U "$DB_SUPERUSER" \
-  --encoding=UTF8 --locale=C --data-checksums
-
-
-⸻
-
-6) Configure port & access (local-only)
-
-# Use a non-default port to avoid clashes
-PORT=54329
-
-# postgresql.conf
-sed -i "s/^#\?port = .*/port = $PORT/" "$PGDATA/postgresql.conf"
-sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
-
-# pg_hba.conf (allow local connections)
-cat >> "$PGDATA/pg_hba.conf" <<'EOF'
-
-# local trust for the current user; tighten as needed
-local   all             all                                     trust
-host    all             all             127.0.0.1/32            trust
-EOF
-
-Security note: trust is fine for a local dev box. For anything else, switch to md5/scram-sha-256 and set a password.
-
-⸻
-
-7) Start & stop the server (no systemd)
-
-# Start
-pg_ctl -D "$PGDATA" -l "$PG_PREFIX/log/server.log" start
-
-# Check status
-pg_ctl -D "$PGDATA" status
-
-# (Optional) set a password if you plan to use md5/scram later
-# psql -p $PORT -d postgres -c "ALTER USER $DB_SUPERUSER WITH PASSWORD 'change_me_strong';"
-
-# Stop (when needed)
-# pg_ctl -D "$PGDATA" stop -m fast
-
-
-⸻
-
-8) Quick psql sanity check
-
-psql -p $PORT -d postgres -c "select version();"
-
-
-⸻
-
-9) Python smoke test (psycopg 3)
-
-python3 -m venv ~/local/pg16/venv
-source ~/local/pg16/venv/bin/activate
-pip install --upgrade pip
-pip install "psycopg[binary]"
-
-# save as test_pg.py and run: python test_pg.py
-import psycopg
-import os
-
+print_python() {
+  cat > ./test_pg.py <<'PY'
+import os, psycopg
 port = int(os.environ.get("PORT", "54329"))
-user = os.environ.get("USER")  # same as initdb superuser
+user = os.environ.get("USER", "postgres")
 dsn = f"host=127.0.0.1 port={port} dbname=postgres user={user}"
-
 with psycopg.connect(dsn) as conn:
     with conn.cursor() as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS t_ping (id serial primary key, msg text)")
@@ -157,62 +151,52 @@ with psycopg.connect(dsn) as conn:
         total, = cur.fetchone()
         print("Inserted:", row)
         print("Total rows in t_ping:", total)
+PY
+  echo ">>> Wrote ./test_pg.py"
+  echo "    Create venv and run:"
+  echo "      python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install 'psycopg[binary]'"
+  echo "      PORT=$PORT python ./test_pg.py"
+}
 
-Expected output shows one inserted row and the total count.
+purge() {
+  echo ">>> This will delete $PREFIX. Data dir: $DATADIR (kept). Continue? (y/N)"
+  if [[ "${1:-}" != "-y" ]]; then
+    read -r ans; [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
+  fi
+  rm -rf "$PREFIX"
+  echo ">>> Removed $PREFIX. You can remove data with: rm -rf '$DATADIR'"
+}
 
-⸻
-
-10) Run everything in one go (helper script, optional)
-
-cat > ~/local/pg16/run.sh <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
-
-export PG_PREFIX="$HOME/local/pg16"
-export PG_HOME="$PG_PREFIX/usr/lib/postgresql/16"
-export PG_BIN="$PG_HOME/bin"
-export PG_SHARE="$PG_PREFIX/usr/share/postgresql/16"
-export PGDATA="$HOME/data/pg16"
-if [ -d "$PG_PREFIX/usr/lib/x86_64-linux-gnu" ]; then
-  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-elif [ -d "$PG_PREFIX/usr/lib/aarch64-linux-gnu" ]; then
-  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
-fi
-export PATH="$PG_BIN:$PATH"
-export PORT=54329
+setup_all() {
+  download
+  extract_pkgs
+  export_vars
+  # quick dependency hint if something is missing
+  if ! ldd "$PG_BIN/postgres" | grep -q "not found"; then
+    :
+  else
+    echo "!!! Some shared libs are missing on your system (see ldd output above)."
+    echo "    Install the missing system libs (e.g., libreadline8, libssl3, zlib1g, libicu) via apt, or download their .deb and extract into $PREFIX/usr/lib/*-linux-gnu."
+  fi
+  init_db
+  echo ">>> Setup complete."
+  echo ">>> Start server with: $0 start"
+  echo ">>> psql with:         $0 psql"
+}
 
 case "${1:-}" in
-  start)
-    pg_ctl -D "$PGDATA" -l "$PG_PREFIX/log/server.log" start
-    ;;
-  stop)
-    pg_ctl -D "$PGDATA" stop -m fast
-    ;;
-  status)
-    pg_ctl -D "$PGDATA" status || true
-    ;;
-  psql)
-    exec psql -p "$PORT" -d postgres
-    ;;
+  setup)         setup_all ;;
+  start)         start_pg ;;
+  stop)          stop_pg ;;
+  status)        status_pg ;;
+  psql)          psql_pg ;;
+  print-python)  print_python ;;
+  purge)         purge "${2:-}" ;;
   *)
-    echo "Usage: $0 {start|stop|status|psql}"
+    cat <<EOF
+Usage: $0 {setup|start|stop|status|psql|print-python|purge [-y]}
+Env vars: PREFIX='$PREFIX' DATADIR='$DATADIR' PORT='$PORT'
+EOF
     exit 1
     ;;
 esac
-EOS
-chmod +x ~/local/pg16/run.sh
-
-Use:
-
-~/local/pg16/run.sh start
-~/local/pg16/run.sh status
-~/local/pg16/run.sh psql
-~/local/pg16/run.sh stop
-
-
-⸻
-
-Notes & Troubleshooting
-	•	If initdb or postgres complains about missing libs (e.g., libreadline.so, libicu.so, libssl.so), download their .deb and re-extract into ~/local/pg16. Ensure LD_LIBRARY_PATH points to the correct .../usr/lib/*-linux-gnu directory created by extraction.
-	•	You can move this whole tree elsewhere; just update the env vars. No root/sudo required, no system files touched.
-	•	To run multiple versions in parallel, repeat the above with different PG_PREFIX, PGDATA, and PORT.
