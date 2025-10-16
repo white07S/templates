@@ -259,7 +259,7 @@ esac
 
 
 
-
+https://github.com/pgvector/pgvector/archive/v0.8.0.tar.gz 
 chmod +x build-pg-from-source.sh
 
 # (Ensure the tarball exists exactly here)
@@ -274,3 +274,301 @@ ls -lh /mnt/binary/postgresql-16.1.tar.bz2
 ./build-pg-from-source.sh print-python
 python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip 'psycopg[binary]'
 PORT=54329 python ./test_pg.py
+
+
+#!/usr/bin/env bash
+# build-pg-from-source.sh
+# Build & run PostgreSQL 16.1 from local source tarball (no systemd) + pgvector.
+#
+# Prereqs (dev packages):
+#   Debian/Ubuntu: sudo apt install build-essential gcc make zlib1g-dev libreadline-dev libicu-dev libssl-dev pkg-config
+#   RHEL/CentOS:   sudo yum groupinstall "Development Tools" && sudo yum install zlib-devel readline-devel libicu-devel openssl-devel
+#
+# Usage:
+#   ./build-pg-from-source.sh setup          # build/install PG, build/install pgvector, initdb, enable extension
+#   ./build-pg-from-source.sh start          # start server
+#   ./build-pg-from-source.sh stop           # stop server
+#   ./build-pg-from-source.sh status         # status
+#   ./build-pg-from-source.sh psql           # open psql
+#   ./build-pg-from-source.sh print-python   # write ./test_pg.py (psycopg3 smoke test)
+#   ./build-pg-from-source.sh purge [-y]     # remove install dir (keeps data)
+#
+# Override defaults (optional):
+#   PREFIX=/opt/pgsql-16.1 DATADIR=/pgdatabase/data PORT=54329 PGVECTOR_TARBALL=/mnt/binary/pgvector-0.7.4.tar.gz ./build-pg-from-source.sh setup
+
+set -euo pipefail
+
+# --------- CONFIGURABLE DEFAULTS ----------
+TARBALL="${TARBALL:-/mnt/binary/postgresql-16.1.tar.bz2}"   # REQUIRED local tarball path for PostgreSQL
+PG_VERSION="${PG_VERSION:-16.1}"                             # source version (for info only)
+PORT="${PORT:-54329}"
+
+# pgvector local source tarball (REQUIRED to auto-build pgvector)
+PGVECTOR_TARBALL="${PGVECTOR_TARBALL:-/mnt/binary/pgvector-0.7.4.tar.gz}"
+
+# Install prefix (no sudo needed if under $HOME)
+PREFIX="${PREFIX:-$HOME/local/pgsql-$PG_VERSION}"
+DATADIR="${DATADIR:-$HOME/data/pgsql-$PG_VERSION}"
+
+# Build directory (temporary)
+BUILDROOT="${BUILDROOT:-$HOME/build}"
+SRCDIR="$BUILDROOT/postgresql-$PG_VERSION"
+
+LOGDIR="$PREFIX/log"
+# ------------------------------------------
+
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+export_env() {
+  export PATH="$PREFIX/bin:$PATH"
+  export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+  export PGDATA="$DATADIR"
+}
+
+check_tarball_pg() {
+  if [[ ! -f "$TARBALL" ]]; then
+    cat >&2 <<EOF
+Missing PostgreSQL source tarball:
+  $TARBALL
+
+Place the file here first (no network downloads are attempted by this script).
+Example:
+  https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.bz2  ->  $TARBALL
+EOF
+    exit 3
+  fi
+}
+
+check_tarball_pgvector() {
+  if [[ ! -f "$PGVECTOR_TARBALL" ]]; then
+    cat >&2 <<EOF
+Missing pgvector source tarball:
+  $PGVECTOR_TARBALL
+
+Download pgvector's source tarball manually and place it locally, then set:
+  PGVECTOR_TARBALL=/path/to/pgvector-<version>.tar.gz
+EOF
+    exit 4
+  fi
+}
+
+extract_source_pg() {
+  mkdir -p "$BUILDROOT"
+  echo ">>> Extracting $TARBALL -> $BUILDROOT"
+  rm -rf "$SRCDIR"
+  tar -xf "$TARBALL" -C "$BUILDROOT"
+  [[ -d "$SRCDIR" ]] || die "Expected source dir not found: $SRCDIR"
+}
+
+configure_build_pg() {
+  need_cmd gcc
+  need_cmd make
+  need_cmd pkg-config || true
+  mkdir -p "$PREFIX" "$DATADIR" "$LOGDIR"
+
+  echo ">>> Configuring PostgreSQL $PG_VERSION"
+  cd "$SRCDIR"
+  ./configure \
+    --prefix="$PREFIX" \
+    --with-openssl \
+    --with-icu \
+    --with-readline
+}
+
+compile_install_pg() {
+  cd "$SRCDIR"
+  echo ">>> Building PostgreSQL (this may take a while)"
+  make -j"$(nproc)"
+  echo ">>> Installing to $PREFIX"
+  make install
+}
+
+build_install_pgvector() {
+  export_env
+  check_tarball_pgvector
+
+  local vec_build_dir="$BUILDROOT/pgvector-src"
+  rm -rf "$vec_build_dir"
+  mkdir -p "$vec_build_dir"
+  echo ">>> Extracting $PGVECTOR_TARBALL -> $vec_build_dir"
+  tar -xf "$PGVECTOR_TARBALL" -C "$vec_build_dir"
+
+  # Find extracted dir (pgvector-*/)
+  local vec_src
+  vec_src="$(find "$vec_build_dir" -maxdepth 1 -type d -name 'pgvector-*' | head -n1)"
+  [[ -n "${vec_src:-}" ]] || die "Cannot locate extracted pgvector source directory."
+
+  echo ">>> Building pgvector with PG_CONFIG=$PREFIX/bin/pg_config"
+  cd "$vec_src"
+  make -j"$(nproc)" PG_CONFIG="$PREFIX/bin/pg_config"
+  echo ">>> Installing pgvector"
+  make install PG_CONFIG="$PREFIX/bin/pg_config"
+
+  echo ">>> Verifying pgvector control file"
+  [[ -f "$PREFIX/share/extension/vector.control" ]] || die "pgvector install failed (vector.control not found)."
+}
+
+init_db() {
+  export_env
+  if [[ -s "$PGDATA/PG_VERSION" ]]; then
+    echo ">>> PGDATA already initialized at $PGDATA"
+    return
+  fi
+
+  echo ">>> Initializing database cluster at $PGDATA"
+  mkdir -p "$PGDATA"
+  DBUSER="${USER:-$(id -un)}"
+  "$PREFIX/bin/initdb" -D "$PGDATA" -U "$DBUSER" --encoding=UTF8 --locale=C --data-checksums
+
+  # Basic config: localhost only + chosen port
+  sed -i "s/^#\?port = .*/port = $PORT/" "$PGDATA/postgresql.conf"
+  sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
+
+  # Local trust for dev convenience (switch to md5/scram later)
+  {
+    echo ""
+    echo "# added by build-pg-from-source.sh"
+    echo "local   all   all                 trust"
+    echo "host    all   all  127.0.0.1/32  trust"
+  } >> "$PGDATA/pg_hba.conf"
+}
+
+_is_running() {
+  export_env
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1
+}
+
+start_pg() {
+  export_env
+  echo ">>> Starting PostgreSQL (port $PORT)"
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" -l "$LOGDIR/server.log" -w start
+}
+
+stop_pg() {
+  export_env
+  echo ">>> Stopping PostgreSQL"
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" -w stop -m fast
+}
+
+status_pg() {
+  export_env
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" status || true
+}
+
+enable_pgvector() {
+  export_env
+  echo ">>> Enabling pgvector extension (postgres & template1)"
+  local started_here=0
+  if ! _is_running; then
+    start_pg
+    started_here=1
+  fi
+  # Install extension into postgres and template1 so new DBs inherit it
+  "$PREFIX/bin/psql" -h 127.0.0.1 -p "$PORT" -d postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  "$PREFIX/bin/psql" -h 127.0.0.1 -p "$PORT" -d template1 -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  echo ">>> pgvector enabled."
+
+  # quick smoke check
+  "$PREFIX/bin/psql" -h 127.0.0.1 -p "$PORT" -d postgres -At -c "SELECT extname FROM pg_extension WHERE extname='vector';" | grep -q '^vector$' \
+    && echo ">>> Verified: vector extension present in postgres."
+
+  if [[ "$started_here" -eq 1 ]]; then
+    stop_pg
+  fi
+}
+
+psql_pg() {
+  export_env
+  exec "$PREFIX/bin/psql" -p "$PORT" -d postgres
+}
+
+print_python() {
+  cat > ./test_pg.py <<'PY'
+import os, psycopg
+port = int(os.environ.get("PORT", "54329"))
+user = os.environ.get("USER", "postgres")
+dsn = f"host=127.0.0.1 port={port} dbname=postgres user={user}"
+with psycopg.connect(dsn) as conn:
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS t_ping (id serial primary key, msg text)")
+        cur.execute("INSERT INTO t_ping (msg) VALUES ('hello from psycopg3') RETURNING id, msg")
+        row = cur.fetchone()
+        cur.execute("SELECT count(*) FROM t_ping")
+        total, = cur.fetchone()
+        # pgvector smoke: ensure extension works
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cur.execute("CREATE TABLE IF NOT EXISTS items (id serial primary key, embedding vector(4))")
+        cur.execute("INSERT INTO items (embedding) VALUES ('[1,2,3,4]')")
+        cur.execute("SELECT embedding <-> '[1,2,3,4]'::vector FROM items LIMIT 1")
+        dist, = cur.fetchone()
+        print("Inserted:", row)
+        print("Total rows in t_ping:", total)
+        print("pgvector distance check:", dist)
+PY
+  echo ">>> Wrote ./test_pg.py"
+  echo "    Create venv and run:"
+  echo "      python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install 'psycopg[binary]'"
+  echo "      PORT=$PORT python ./test_pg.py"
+}
+
+purge() {
+  echo ">>> This will DELETE install dir: $PREFIX"
+  echo "    Data dir (PGDATA) is at: $DATADIR  (NOT removed by this command)"
+  if [[ "${1:-}" != "-y" ]]; then
+    read -r -p "Continue? (y/N) " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
+  fi
+  rm -rf "$PREFIX"
+  echo ">>> Removed $PREFIX. To remove data:"
+  echo "    rm -rf '$DATADIR'"
+}
+
+setup_all() {
+  echo ">>> PostgreSQL $PG_VERSION"
+  echo ">>> Tarball:           $TARBALL"
+  echo ">>> pgvector Tarball:  $PGVECTOR_TARBALL"
+  echo ">>> Prefix:            $PREFIX"
+  echo ">>> Data dir:          $DATADIR"
+  echo ">>> Port:              $PORT"
+
+  check_tarball_pg
+  extract_source_pg
+  configure_build_pg
+  compile_install_pg
+  build_install_pgvector
+  init_db
+  enable_pgvector
+
+  echo ">>> Setup complete."
+  echo ">>> Start server with: $0 start"
+  echo ">>> psql with:         $0 psql"
+  echo ">>> Logs:              $LOGDIR/server.log"
+}
+
+case "${1:-}" in
+  setup)         setup_all ;;
+  start)         start_pg ;;
+  stop)          stop_pg ;;
+  status)        status_pg ;;
+  psql)          psql_pg ;;
+  print-python)  print_python ;;
+  purge)         purge "${2:-}" ;;
+  *)
+    cat <<EOF
+Usage: $0 {setup|start|stop|status|psql|print-python|purge [-y]}
+Env:
+  TARBALL="$TARBALL"             # REQUIRED: PostgreSQL source tarball (.tar.bz2)
+  PGVECTOR_TARBALL="$PGVECTOR_TARBALL" # REQUIRED: pgvector source tarball (.tar.gz)
+  PREFIX="$PREFIX"               # install dir (bin/lib/share under here)
+  DATADIR="$DATADIR"             # persistent cluster data dir
+  PORT="$PORT"                   # server port
+  BUILDROOT="$BUILDROOT"         # temp build location
+
+Examples:
+  PREFIX=\$HOME/local/pgsql-16.1 DATADIR=\$HOME/data/pgsql-16.1 PORT=54329 $0 setup
+  $0 start && $0 psql
+EOF
+    exit 1
+    ;;
+esac
