@@ -1,84 +1,243 @@
-# Advanced Search Engine Configuration
+#!/usr/bin/env bash
+# build-pg-from-source.sh
+# Build & run PostgreSQL 16.1 from local source tarball (no systemd).
+#
+# Prereqs (dev packages):
+#   Debian/Ubuntu: sudo apt install build-essential gcc make zlib1g-dev libreadline-dev libicu-dev libssl-dev pkg-config
+#   RHEL/CentOS:   sudo yum groupinstall "Development Tools" && sudo yum install zlib-devel readline-devel libicu-devel openssl-devel
+#
+# Usage:
+#   ./build-pg-from-source.sh setup          # extract, configure, build, install, initdb, basic conf
+#   ./build-pg-from-source.sh start          # start server
+#   ./build-pg-from-source.sh stop           # stop server
+#   ./build-pg-from-source.sh status         # status
+#   ./build-pg-from-source.sh psql           # open psql
+#   ./build-pg-from-source.sh print-python   # write ./test_pg.py (psycopg3 smoke test)
+#   ./build-pg-from-source.sh purge [-y]     # remove install dir (keeps data)
+#
+# Override defaults (optional):
+#   PREFIX=/opt/pgsql-16.1 DATADIR=/pgdatabase/data PORT=54329 ./build-pg-from-source.sh setup
 
-# ==========================================
-# Data and Index Paths
-# ==========================================
-# Path to the parquet data file
-DATA_PATH=mock_data_small.parquet
-# For full dataset (10M rows), use:
-# DATA_PATH=mock_data_full.parquet
+set -euo pipefail
 
-# Path to store index files
-INDEX_PATH=./indices
+# --------- CONFIGURABLE DEFAULTS ----------
+TARBALL="${TARBALL:-/mnt/binary/postgresql-16.1.tar.bz2}"   # REQUIRED local tarball path
+PG_VERSION="${PG_VERSION:-16.1}"                             # source version (for info only)
+PORT="${PORT:-54329}"
 
-# ==========================================
-# Embedding Configuration
-# ==========================================
-# Columns to convert to embeddings (comma-separated)
-EMBEDDING_COLUMNS=title,description,content,article
+# Install prefix (no sudo needed if under $HOME)
+PREFIX="${PREFIX:-$HOME/local/pgsql-$PG_VERSION}"
+DATADIR="${DATADIR:-$HOME/data/pgsql-$PG_VERSION}"
 
-# Vector dimension for embeddings
-VECTOR_DIMENSION=4096
+# Build directory (temporary)
+BUILDROOT="${BUILDROOT:-$HOME/build}"
+SRCDIR="$BUILDROOT/postgresql-$PG_VERSION"
 
-# Use real embeddings (true) or random embeddings for testing (false)
-USE_REAL_EMBEDDINGS=false
+LOGDIR="$PREFIX/log"
+# ------------------------------------------
 
-# ==========================================
-# OpenAI Configuration (for real embeddings)
-# ==========================================
-# OpenAI API key
-OPENAI_API_KEY=your-api-key-here
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-# OpenAI API URL (for self-hosted models)
-# For vLLM: http://localhost:8000/v1
-OPENAI_API_URL=http://localhost:8000/v1
+export_env() {
+  export PATH="$PREFIX/bin:$PATH"
+  export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+  export PGDATA="$DATADIR"
+}
 
-# OpenAI model for embeddings
-# For OpenAI: text-embedding-3-large
-# For vLLM: your-embedding-model
-OPENAI_MODEL=text-embedding-3-large
+check_tarball() {
+  if [[ ! -f "$TARBALL" ]]; then
+    cat >&2 <<EOF
+Missing source tarball:
+  $TARBALL
 
-# ==========================================
-# Ingestion Settings
-# ==========================================
-# Force re-indexing (true/false)
-RE_INDEX=false
+Place the file here first (no network downloads are attempted by this script).
+Example (already given by you):
+  https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.bz2  ->  $TARBALL
+EOF
+    exit 3
+  fi
+}
 
-# Chunk size for processing
-CHUNK_SIZE=1000
+extract_source() {
+  mkdir -p "$BUILDROOT"
+  echo ">>> Extracting $TARBALL -> $BUILDROOT"
+  # Clean any previous source dir of same version
+  rm -rf "$SRCDIR"
+  tar -xf "$TARBALL" -C "$BUILDROOT"
+  [[ -d "$SRCDIR" ]] || die "Expected source dir not found: $SRCDIR"
+}
 
-# ==========================================
-# Benchmark Configuration
-# ==========================================
-# Number of queries per mode for benchmarking
-BENCHMARK_QUERIES=100
+configure_build() {
+  need_cmd gcc
+  need_cmd make
+  need_cmd pkg-config || true   # helpful but not mandatory
+  mkdir -p "$PREFIX" "$DATADIR" "$LOGDIR"
 
-# ==========================================
-# Search Configuration
-# ==========================================
-# Default number of results to return
-DEFAULT_TOP_K=5
+  echo ">>> Configuring PostgreSQL $PG_VERSION"
+  cd "$SRCDIR"
+  # Common useful flags; configure will auto-disable missing features
+  ./configure \
+    --prefix="$PREFIX" \
+    --with-openssl \
+    --with-icu \
+    --with-readline
+}
 
-# Maximum query timeout in seconds
-QUERY_TIMEOUT=2.0
+compile_install() {
+  cd "$SRCDIR"
+  echo ">>> Building (this may take a while)"
+  make -j"$(nproc)"
 
-# ==========================================
-# Performance Tuning
-# ==========================================
-# Number of parallel workers for hybrid search
-PARALLEL_WORKERS=3
+  echo ">>> Installing to $PREFIX"
+  make install
+}
 
-# DuckDB memory limit
-DUCKDB_MEMORY_LIMIT=4GB
+init_db() {
+  export_env
+  if [[ -s "$PGDATA/PG_VERSION" ]]; then
+    echo ">>> PGDATA already initialized at $PGDATA"
+    return
+  fi
 
-# Tantivy heap size in MB
-TANTIVY_HEAP_SIZE=100
+  echo ">>> Initializing database cluster at $PGDATA"
+  mkdir -p "$PGDATA"
+  DBUSER="${USER:-$(id -un)}"
+  "$PREFIX/bin/initdb" -D "$PGDATA" -U "$DBUSER" --encoding=UTF8 --locale=C --data-checksums
 
-# ==========================================
-# Logging and Debug
-# ==========================================
-# Enable debug logging
-DEBUG=false
+  # Basic config: localhost only + chosen port
+  sed -i "s/^#\?port = .*/port = $PORT/" "$PGDATA/postgresql.conf"
+  sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
 
-# Log file path
-LOG_FILE=search_engine.log
+  # Local trust for dev convenience (switch to md5/scram for auth later)
+  {
+    echo ""
+    echo "# added by build-pg-from-source.sh"
+    echo "local   all   all                 trust"
+    echo "host    all   all  127.0.0.1/32  trust"
+  } >> "$PGDATA/pg_hba.conf"
+}
+
+start_pg() {
+  export_env
+  echo ">>> Starting PostgreSQL (port $PORT)"
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" -l "$LOGDIR/server.log" start
+}
+
+stop_pg() {
+  export_env
+  echo ">>> Stopping PostgreSQL"
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" stop -m fast
+}
+
+status_pg() {
+  export_env
+  "$PREFIX/bin/pg_ctl" -D "$PGDATA" status || true
+}
+
+psql_pg() {
+  export_env
+  exec "$PREFIX/bin/psql" -p "$PORT" -d postgres
+}
+
+print_python() {
+  cat > ./test_pg.py <<'PY'
+import os, psycopg
+port = int(os.environ.get("PORT", "54329"))
+user = os.environ.get("USER", "postgres")
+dsn = f"host=127.0.0.1 port={port} dbname=postgres user={user}"
+with psycopg.connect(dsn) as conn:
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS t_ping (id serial primary key, msg text)")
+        cur.execute("INSERT INTO t_ping (msg) VALUES ('hello from psycopg3') RETURNING id, msg")
+        row = cur.fetchone()
+        cur.execute("SELECT count(*) FROM t_ping")
+        total, = cur.fetchone()
+        print("Inserted:", row)
+        print("Total rows in t_ping:", total)
+PY
+  echo ">>> Wrote ./test_pg.py"
+  echo "    Create venv and run:"
+  echo "      python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install 'psycopg[binary]'"
+  echo "      PORT=$PORT python ./test_pg.py"
+}
+
+purge() {
+  echo ">>> This will DELETE install dir: $PREFIX"
+  echo "    Data dir (PGDATA) is at: $DATADIR  (NOT removed by this command)"
+  if [[ "${1:-}" != "-y" ]]; then
+    read -r -p "Continue? (y/N) " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
+  fi
+  rm -rf "$PREFIX"
+  echo ">>> Removed $PREFIX. To remove data:"
+  echo "    rm -rf '$DATADIR'"
+}
+
+setup_all() {
+  echo ">>> PostgreSQL $PG_VERSION"
+  echo ">>> Tarball:  $TARBALL"
+  echo ">>> Prefix:   $PREFIX"
+  echo ">>> Data dir: $DATADIR"
+  echo ">>> Port:     $PORT"
+
+  check_tarball
+  extract_source
+  configure_build
+  compile_install
+  init_db
+
+  echo ">>> Setup complete."
+  echo ">>> Start server with: $0 start"
+  echo ">>> psql with:         $0 psql"
+  echo ">>> Logs:              $LOGDIR/server.log"
+}
+
+case "${1:-}" in
+  setup)         setup_all ;;
+  start)         start_pg ;;
+  stop)          stop_pg ;;
+  status)        status_pg ;;
+  psql)          psql_pg ;;
+  print-python)  print_python ;;
+  purge)         purge "${2:-}" ;;
+  *)
+    cat <<EOF
+Usage: $0 {setup|start|stop|status|psql|print-python|purge [-y]}
+Env:
+  TARBALL="$TARBALL"   # REQUIRED local source tarball path
+  PREFIX="$PREFIX"     # install dir (bin/lib/share under here)
+  DATADIR="$DATADIR"   # persistent cluster data dir
+  PORT="$PORT"         # server port
+  BUILDROOT="$BUILDROOT" # temp build location
+
+Examples:
+  PREFIX=\$HOME/local/pgsql-16.1 DATADIR=\$HOME/data/pgsql-16.1 PORT=54329 $0 setup
+  $0 start && $0 psql
+EOF
+    exit 1
+    ;;
+esac
+
+
+
+
+
+
+
+
+
+chmod +x build-pg-from-source.sh
+
+# (Ensure the tarball exists exactly here)
+ls -lh /mnt/binary/postgresql-16.1.tar.bz2
+
+# Build + install into your home and init data dir:
+./build-pg-from-source.sh setup
+
+# Run and test:
+./build-pg-from-source.sh start
+./build-pg-from-source.sh psql
+./build-pg-from-source.sh print-python
+python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip 'psycopg[binary]'
+PORT=54329 python ./test_pg.py
