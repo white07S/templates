@@ -1,1 +1,218 @@
-{"_default": {"1": {"messages": [{"role": "user", "content": "I'm planning a trip to Japan next month."}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:04.845146", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "2": {"messages": [{"role": "user", "content": "I'm planning a trip to Japan next month."}, {"role": "assistant", "content": "That sounds exciting! Do you have specific places in Japan you plan to visit or activities you're interested in?"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:05.847309", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "3": {"messages": [{"role": "user", "content": "I'm particularly interested in visiting temples and trying local food."}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:05.855064", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "4": {"messages": [{"role": "user", "content": "I'm particularly interested in visiting temples and trying local food."}, {"role": "assistant", "content": "Great choices! Japan has many beautiful temples and delicious local cuisine. Here are a few recommendations:\n\n### Temples:\n1. **Kyoto**: \n   - Kinkaku-ji (Golden Pavilion)\n   - Fushimi Inari Taisha (famous for its thousands of torii gates)\n   - Kiyomizu-dera (offers stunning views of the city)\n\n2. **Tokyo**: \n   - Senso-ji (the oldest temple in Tokyo)\n   - Meiji Shrine (a serene Shinto shrine surrounded by forest)\n\n3. **Nara**: \n   - Todai-ji (houses a giant Buddha statue)\n   - Kasuga-taisha (known for its hundreds of lanterns)\n\n### Local Food:\n- **Ramen**: Try different styles in cities like Fukuoka or Sapporo.\n- **Sushi**: Visit Tsukiji Outer Market in Tokyo for fresh sushi.\n- **Okonomiyaki**: A savory pancake, especially popular in Osaka.\n- **Kaiseki**: A traditional multi-course meal, best enjoyed in Kyoto.\n\nLet me know if you need more specific recommendations or tips!"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:10.397626", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "5": {"messages": [{"role": "user", "content": "What would you recommend for a first-time visitor?"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:10.406351", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "6": {"messages": [{"role": "user", "content": "What would you recommend for a first-time visitor?"}, {"role": "assistant", "content": "For a first-time visitor to Japan interested in temples and local food, here are some top recommendations:\n\n### Temples:\n1. **Kyoto**: \n   - **Kinkaku-ji** (Golden Pavilion): Iconic and beautiful, especially in autumn.\n   - **Fushimi Inari Taisha**: Famous for its thousands of vermilion torii gates.\n   - **Kiyomizu-dera**: Offers stunning views and is especially lovely during cherry blossom season.\n\n2. **Tokyo**: \n   - **Senso-ji**: Tokyo's oldest temple, located in Asakusa; a great place to experience traditional culture.\n   - **Meiji Shrine**: A peaceful Shinto shrine surrounded by a forested area, perfect for a tranquil experience.\n\n3. **Nara**: \n   - **Todai-ji**: Home to a giant Buddha statue and surrounded by friendly deer in Nara Park.\n   - **Kasuga-taisha**: Known for its beautiful lanterns and serene atmosphere.\n\n### Local Food Experiences:\n- **Street Food**: Try takoyaki (octopus balls) and okonomiyaki (Japanese savory pancakes) in Osaka.\n- **Sushi**: Visit a conveyor belt sushi restaurant or the Tsukiji Outer Market in Tokyo for fresh sushi.\n- **Ramen**: Sample different regional styles; consider visiting famous ramen shops in Fukuoka or Tokyo.\n- **Kaiseki**: Experience a traditional multi-course meal in Kyoto for a taste of seasonal ingredients and artistry.\n\n### Tips:\n- **Transportation**: Consider getting a Japan Rail Pass for unlimited travel on JR trains, which is convenient for visiting multiple cities.\n- **Etiquette**: Familiarize yourself with basic Japanese etiquette, like bowing, removing shoes when entering homes or certain temples, and being quiet in sacred places.\n\nEnjoy your trip, and let me know if you need more details on any specific aspect!"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:18.185734", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "7": {"messages": [{"role": "user", "content": "How about accommodation? I prefer traditional experiences."}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:18.193571", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "8": {"messages": [{"role": "user", "content": "How about accommodation? I prefer traditional experiences."}, {"role": "assistant", "content": "For a traditional experience in Japan, consider these types of accommodations:\n\n### Ryokan (Traditional Inn):\n1. **Kyoto**: \n   - **Gion Hatanaka**: Located in the historic Gion district, offers traditional tatami rooms and kaiseki meals.\n   - **Tawaraya Ryokan**: A luxurious option known for its exceptional service and ambiance.\n\n2. **Hakone**: \n   - **Gora Kadan**: A former retreat for the Imperial Family, featuring onsen (hot spring) baths and beautiful gardens.\n\n3. **Nara**: \n   - **Naramachi Yuukaku**: A charming ryokan in the historic Naramachi area, offering a traditional atmosphere.\n\n### Minpaku (Private Home Stay):\n- **Kyoto or Takayama**: Look for minpaku options where you can stay with local families and experience daily life and meals.\n\n### Shukubo (Temple Lodging):\n- **Mount Koya**: Stay at a temple like **Shojoshin-in**, where you can participate in morning prayers and enjoy vegetarian Buddhist cuisine.\n\n### Capsule Hotels:\n- While not traditional in the classical sense, capsule hotels provide a unique and modern Japanese experience. Consider **Nine Hours** in Kyoto or Tokyo.\n\n### Tips:\n- **Booking**: Reserve well in advance, especially for popular ryokans and during peak seasons.\n- **Onsen Etiquette**: If you stay in a ryokan with an onsen, familiarize yourself with onsen etiquette, such as washing before entering the baths.\n\nLet me know if you need help with specific bookings or more options!"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:25.667695", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "9": {"messages": [{"role": "user", "content": "Can you remind me what I said I was interested in?"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:25.677144", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}, "10": {"messages": [{"role": "user", "content": "Can you remind me what I said I was interested in?"}, {"role": "assistant", "content": "You mentioned that you're particularly interested in visiting temples and trying local food during your trip to Japan. Additionally, you expressed a preference for traditional accommodation experiences. If you need more information or recommendations related to these interests, feel free to ask!"}], "metadata": {"type": "episodic", "timestamp": "2025-09-22T08:17:26.755963", "session_id": "5697f897-5a89-4d56-9a31-25ca51d2ac84"}, "mem0_result": {"status": "stored_locally"}}}}
+Got it. Here’s a crisp, copy-pasteable, systemd-free PostgreSQL setup using .deb packages, installed into your own folders, with a Python smoke test.
+
+⸻
+
+0) Assumptions
+	•	Debian/Ubuntu host (x86_64 or arm64).
+	•	You want PostgreSQL 16 (adjust to 15/17 similarly).
+	•	You’ll keep everything under ~/local/pg16 (binaries) and ~/data/pg16 (data).
+
+Tip: If you’re offline, download the .deb files on a machine with internet and move them over, then start from step 2.
+
+⸻
+
+1) Create folders
+
+mkdir -p ~/local/pg16/{pkg,log} ~/data/pg16
+
+
+⸻
+
+2) Download the needed .deb packages (once)
+
+These are the server + client and the runtime shared libs they depend on. Exact lib package versions vary by distro; the generic names below work on current Ubuntu/Debian.
+
+cd ~/local/pg16/pkg
+
+# Core packages
+apt-get download \
+  postgresql-16 \
+  postgresql-client-16 \
+  postgresql-common \
+  libpq5
+
+# Likely shared-lib deps (adjust if your distro uses different names)
+apt-get download \
+  libreadline8 \
+  libedit2 \
+  libssl3 \
+  zlib1g
+
+# On some distros you may also need ICU (version varies, e.g., libicu70/libicu72)
+# apt-get download libicu70 || apt-get download libicu72 || true
+
+If you’re fully offline now, just place all those .deb files into ~/local/pg16/pkg/.
+
+⸻
+
+3) Extract the .deb files without installing system-wide
+
+cd ~/local/pg16/pkg
+for f in *.deb; do
+  dpkg-deb -x "$f" ..
+done
+
+This unpacks under ~/local/pg16/usr/... (no root, no system install).
+
+⸻
+
+4) Environment variables for your local Postgres
+
+# --- put these into your shell rc (~/.bashrc) if you like ---
+export PG_PREFIX="$HOME/local/pg16"
+export PG_HOME="$PG_PREFIX/usr/lib/postgresql/16"
+export PG_BIN="$PG_HOME/bin"
+export PG_SHARE="$PG_PREFIX/usr/share/postgresql/16"
+export PGDATA="$HOME/data/pg16"
+# adjust arch dir if arm64 vs x86_64
+if [ -d "$PG_PREFIX/usr/lib/x86_64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+elif [ -d "$PG_PREFIX/usr/lib/aarch64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
+fi
+export PATH="$PG_BIN:$PATH"
+
+Reload your shell or run the block once in the current shell.
+
+⸻
+
+5) Initialize the data directory (no systemctl)
+
+# Choose a DB superuser name (your Linux user is fine)
+DB_SUPERUSER="$(whoami)"
+
+# Initialize cluster
+initdb -D "$PGDATA" -U "$DB_SUPERUSER" \
+  --encoding=UTF8 --locale=C --data-checksums
+
+
+⸻
+
+6) Configure port & access (local-only)
+
+# Use a non-default port to avoid clashes
+PORT=54329
+
+# postgresql.conf
+sed -i "s/^#\?port = .*/port = $PORT/" "$PGDATA/postgresql.conf"
+sed -i "s/^#\?listen_addresses = .*/listen_addresses = '127.0.0.1'/" "$PGDATA/postgresql.conf"
+
+# pg_hba.conf (allow local connections)
+cat >> "$PGDATA/pg_hba.conf" <<'EOF'
+
+# local trust for the current user; tighten as needed
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+EOF
+
+Security note: trust is fine for a local dev box. For anything else, switch to md5/scram-sha-256 and set a password.
+
+⸻
+
+7) Start & stop the server (no systemd)
+
+# Start
+pg_ctl -D "$PGDATA" -l "$PG_PREFIX/log/server.log" start
+
+# Check status
+pg_ctl -D "$PGDATA" status
+
+# (Optional) set a password if you plan to use md5/scram later
+# psql -p $PORT -d postgres -c "ALTER USER $DB_SUPERUSER WITH PASSWORD 'change_me_strong';"
+
+# Stop (when needed)
+# pg_ctl -D "$PGDATA" stop -m fast
+
+
+⸻
+
+8) Quick psql sanity check
+
+psql -p $PORT -d postgres -c "select version();"
+
+
+⸻
+
+9) Python smoke test (psycopg 3)
+
+python3 -m venv ~/local/pg16/venv
+source ~/local/pg16/venv/bin/activate
+pip install --upgrade pip
+pip install "psycopg[binary]"
+
+# save as test_pg.py and run: python test_pg.py
+import psycopg
+import os
+
+port = int(os.environ.get("PORT", "54329"))
+user = os.environ.get("USER")  # same as initdb superuser
+dsn = f"host=127.0.0.1 port={port} dbname=postgres user={user}"
+
+with psycopg.connect(dsn) as conn:
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS t_ping (id serial primary key, msg text)")
+        cur.execute("INSERT INTO t_ping (msg) VALUES ('hello from psycopg3') RETURNING id, msg")
+        row = cur.fetchone()
+        cur.execute("SELECT count(*) FROM t_ping")
+        total, = cur.fetchone()
+        print("Inserted:", row)
+        print("Total rows in t_ping:", total)
+
+Expected output shows one inserted row and the total count.
+
+⸻
+
+10) Run everything in one go (helper script, optional)
+
+cat > ~/local/pg16/run.sh <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PG_PREFIX="$HOME/local/pg16"
+export PG_HOME="$PG_PREFIX/usr/lib/postgresql/16"
+export PG_BIN="$PG_HOME/bin"
+export PG_SHARE="$PG_PREFIX/usr/share/postgresql/16"
+export PGDATA="$HOME/data/pg16"
+if [ -d "$PG_PREFIX/usr/lib/x86_64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+elif [ -d "$PG_PREFIX/usr/lib/aarch64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$PG_PREFIX/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
+fi
+export PATH="$PG_BIN:$PATH"
+export PORT=54329
+
+case "${1:-}" in
+  start)
+    pg_ctl -D "$PGDATA" -l "$PG_PREFIX/log/server.log" start
+    ;;
+  stop)
+    pg_ctl -D "$PGDATA" stop -m fast
+    ;;
+  status)
+    pg_ctl -D "$PGDATA" status || true
+    ;;
+  psql)
+    exec psql -p "$PORT" -d postgres
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|status|psql}"
+    exit 1
+    ;;
+esac
+EOS
+chmod +x ~/local/pg16/run.sh
+
+Use:
+
+~/local/pg16/run.sh start
+~/local/pg16/run.sh status
+~/local/pg16/run.sh psql
+~/local/pg16/run.sh stop
+
+
+⸻
+
+Notes & Troubleshooting
+	•	If initdb or postgres complains about missing libs (e.g., libreadline.so, libicu.so, libssl.so), download their .deb and re-extract into ~/local/pg16. Ensure LD_LIBRARY_PATH points to the correct .../usr/lib/*-linux-gnu directory created by extraction.
+	•	You can move this whole tree elsewhere; just update the env vars. No root/sudo required, no system files touched.
+	•	To run multiple versions in parallel, repeat the above with different PG_PREFIX, PGDATA, and PORT.
