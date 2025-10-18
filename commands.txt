@@ -1,469 +1,140 @@
-Below is a production-style async load-tester that hammers a vLLM /v1/chat/completions endpoint with ~200 concurrent users, each pushing 7k–10k-token inputs and requesting 4k–6k outputs. It measures TTFT, end-to-end latency, throughput, and reports p50/p95 overall and per “agent step” (4–5 layered calls with small think-time gaps). It also includes an optional Prometheus scrape (vLLM /metrics) to correlate server-side throughput/queueing.
+Here you go — minimal, to-the-point, and ready to paste.
 
-Why these metrics (industry practice)
-	•	Track TTFT (time to first token), TPOT/ITL (time per output token), and tail latencies p95/p99; these drive perceived responsiveness and real capacity.  ￼
-	•	vLLM exposes Prometheus metrics you can scrape during the run (tokens/s, request durations, acceptance when using speculative decoding).  ￼
-	•	NVIDIA & others define end-to-end ≈ TTFT + TPOT × output_tokens; we compute both directly and from stream timing.  ￼
+main.py (FastAPI, async streaming -> OpenAI)
 
-⸻
-
-llm_loadtest.py
-
-#!/usr/bin/env python3
-"""
-LLM Load & Latency Tester for vLLM (OpenAI-compatible /v1/chat/completions)
-
-- 200 concurrent "users" by default
-- Each user can run:
-  (A) Single heavy call: 7k–10k token input, 4k–6k output
-  (B) Agent flow: 4–5 layered calls (plan -> tool->reason->synth), with think-time gaps
-- Measures per-call:
-  * TTFT (time to first token)
-  * E2E latency
-  * Output token rate (tokens/sec) and TPOT (sec/token)
-- Reports p50/p95 by call-type and overall
-- Optional: scrapes vLLM /metrics periodically to CSV for later correlation
-
-NOTE:
-- Token counts are *approximate* unless the server returns `usage`. We try:
-  1) OpenAI streaming with `stream_options={"include_usage": true}` (if supported by your vLLM build)
-  2) Fallback to local tokenizers (tiktoken if present) else char-based backoff.
-
-Run:
-  python llm_loadtest.py --base-url http://localhost:8000 --model Qwen/Qwen3-Next-80B-A3B-Instruct \
-      --api-key sk-xxx --users 200 --mix agent_heavy=0.35
-"""
-
-import asyncio
-import httpx
-import json
+# main.py
 import os
-import random
-import statistics
-import string
-import sys
-import time
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional, Tuple
+import asyncio
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from openai import AsyncOpenAI
 
-# ---------- Config ----------
+# Set OPENAI_API_KEY in your env
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a precise enterprise assistant. Return factual, concise answers with"
-    " clear structure. Cite sources if explicitly requested."
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # narrow in prod
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# If you have tiktoken installed, we can approximate token counts better.
-try:
-    import tiktoken
-    _ENC = tiktoken.get_encoding("cl100k_base")  # good-enough approximation
-    def count_tokens(txt: str) -> int:
-        return len(_ENC.encode(txt))
-except Exception:
-    _ENC = None
-    def count_tokens(txt: str) -> int:
-        # ~4 chars per token heuristic (very rough)
-        return max(1, len(txt) // 4)
+class ChatIn(BaseModel):
+    query: str
+    model: str | None = "gpt-4o-mini"  # pick any chat model you have access to
 
-# ---------- Helpers ----------
-
-def rand_tokens(n_tokens: int) -> str:
-    """Generate pseudo-text roughly n_tokens long."""
-    # We keep words ~5 chars to stabilize tokenization length
-    word = "information"
-    words_needed = max(1, int(n_tokens * 1.2))  # headroom for tokenizer variance
-    chunks = []
-    while len(chunks) < words_needed:
-        # randomize a bit to avoid perfect repeats
-        w = word if random.random() < 0.8 else "".join(random.choices(string.ascii_lowercase, k=10))
-        chunks.append(w)
-    txt = " ".join(chunks)
-    # Adjust to target tokens
-    # crude trim loop
-    while count_tokens(txt) > n_tokens:
-        txt = txt[: int(len(txt) * 0.98)]
-    while count_tokens(txt) < n_tokens:
-        txt += " " + word
-    return txt
-
-def now() -> float:
-    return time.perf_counter()
-
-@dataclass
-class CallResult:
-    user_id: int
-    step_id: int
-    call_type: str  # "single" or "agent_step"
-    ttft_s: float
-    e2e_s: float
-    output_tokens: int
-    output_rate_tps: float
-    tpot_s_per_tok: float
-    input_tokens: int
-    http_status: int
-    ok: bool
-    error: Optional[str] = None
-
-@dataclass
-class TestConfig:
-    base_url: str
-    model: str
-    api_key: str
-    users: int = 200
-    max_concurrency: int = 200
-    mix_agent_heavy: float = 0.3  # probability a user runs agent flow
-    arrival_spread_s: float = 20.0  # jitter user start times across this window
-    stream: bool = True
-    temperature: float = 0.2
-    top_p: float = 0.9
-    force_json: bool = False
-    # heavy single call budgets
-    min_input_tokens: int = 7000
-    max_input_tokens: int = 10000
-    min_output_tokens: int = 4000
-    max_output_tokens: int = 6000
-    # agent flow budgets (per-step ranges)
-    agent_steps: int = 5
-    agent_input_ranges: List[Tuple[int, int]] = None
-    agent_output_ranges: List[Tuple[int, int]] = None
-    think_time_range_s: Tuple[float, float] = (0.2, 1.2)
-    # metrics scrape
-    metrics_url: Optional[str] = None  # e.g., http://localhost:8000/metrics
-    metrics_period_s: float = 2.0
-    metrics_out_csv: Optional[str] = None
-    request_timeout_s: int = 1800
-
-    def __post_init__(self):
-        if self.agent_input_ranges is None:
-            # Step-wise budgets: plan, retrieve, reason, merge, final
-            self.agent_input_ranges = [(800, 1500), (1500, 2500), (1200, 2200), (2000, 3000), (2500, 4000)]
-        if self.agent_output_ranges is None:
-            self.agent_output_ranges = [(300, 700), (300, 800), (400, 900), (600, 1200), (1200, 2200)]
-
-# ---------- Core load functions ----------
-
-async def stream_chat(
-    client: httpx.AsyncClient,
-    cfg: TestConfig,
-    messages: List[Dict],
-    max_tokens: int,
-) -> Tuple[int, float, float, str, int]:
-    """
-    Returns: (output_tokens, ttft_s, e2e_s, content, http_status)
-    Measures TTFT as time to first streamed delta.
-    """
-    headers = {"Authorization": f"Bearer {cfg.api_key}"}
-    body = {
-        "model": cfg.model,
-        "messages": messages,
-        "temperature": cfg.temperature,
-        "top_p": cfg.top_p,
-        "stream": cfg.stream,
-        "max_tokens": max_tokens,
-        # Try to get token usage in stream if supported by your vLLM build:
-        "stream_options": {"include_usage": True},
-    }
-    if cfg.force_json:
-        body["response_format"] = {"type": "json_object"}
-
-    start = now()
-    ttft = None
-    content_chunks = []
-    usage_output_tokens = None
-    status_code = 0
-
-    try:
-        async with client.stream("POST", f"{cfg.base_url}/v1/chat/completions",
-                                 headers=headers, json=body, timeout=cfg.request_timeout_s) as r:
-            status_code = r.status_code
-            async for line in r.aiter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    data = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                # First delta arrival -> TTFT
-                if ttft is None:
-                    ttft = now() - start
-                # Collect text
-                choice = data.get("choices", [{}])[0]
-                delta = choice.get("delta", {}) or choice.get("message", {})
-                if "content" in delta:
-                    content_chunks.append(delta["content"])
-                # Try to read usage if included in stream
-                if "usage" in data and "completion_tokens" in data["usage"]:
-                    usage_output_tokens = int(data["usage"]["completion_tokens"])
-        end = now()
-    except Exception as e:
-        end = now()
-        raise
-
-    content = "".join(content_chunks)
-    # Token counting fallback if stream usage not present
-    if usage_output_tokens is None:
-        usage_output_tokens = count_tokens(content)
-
-    if ttft is None:
-        ttft = end - start
-    e2e = end - start
-    return usage_output_tokens, ttft, e2e, content, status_code
-
-async def one_heavy_call(user_id: int, cfg: TestConfig, client: httpx.AsyncClient) -> CallResult:
-    in_toks = random.randint(cfg.min_input_tokens, cfg.max_input_tokens)
-    out_toks = random.randint(cfg.min_output_tokens, cfg.max_output_tokens)
-    user_prompt = (
-        "Context:\n" + rand_tokens(in_toks) +
-        "\n\nTask: Provide a precise, structured summary with numbered sections and bullet points."
-        " Include risk drivers, controls, and scenario impacts where relevant."
-    )
-    messages = [
-        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-    try:
-        output_tokens, ttft, e2e, content, status = await stream_chat(client, cfg, messages, out_toks)
-        tpot = max(1e-6, (e2e - ttft)) / max(1, output_tokens)
-        return CallResult(
-            user_id=user_id, step_id=0, call_type="single",
-            ttft_s=ttft, e2e_s=e2e, output_tokens=output_tokens,
-            output_rate_tps=output_tokens / max(1e-6, (e2e - ttft)),
-            tpot_s_per_tok=tpot, input_tokens=in_toks, http_status=status, ok=(200 <= status < 300)
+@app.post("/chat")
+async def chat(body: ChatIn):
+    async def token_stream():
+        # Stream tokens from OpenAI and yield them directly to the client
+        stream = await client.chat.completions.create(
+            model=body.model,
+            messages=[{"role": "user", "content": body.query}],
+            stream=True,
         )
-    except Exception as e:
-        return CallResult(
-            user_id=user_id, step_id=0, call_type="single",
-            ttft_s=float("inf"), e2e_s=float("inf"), output_tokens=0,
-            output_rate_tps=0.0, tpot_s_per_tok=float("inf"),
-            input_tokens=in_toks, http_status=0, ok=False, error=str(e)
-        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                # yield raw text chunks; browser will render progressively
+                yield delta.content
+            await asyncio.sleep(0)
 
-async def one_agent_flow(user_id: int, cfg: TestConfig, client: httpx.AsyncClient) -> List[CallResult]:
-    results = []
-    sys_prompt = DEFAULT_SYSTEM_PROMPT + " You may call tools conceptually; respond with reasoning and results each step."
-    for step in range(cfg.agent_steps):
-        in_min, in_max = cfg.agent_input_ranges[min(step, len(cfg.agent_input_ranges)-1)]
-        out_min, out_max = cfg.agent_output_ranges[min(step, len(cfg.agent_output_ranges)-1)]
-        in_toks = random.randint(in_min, in_max)
-        out_toks = random.randint(out_min, out_max)
-
-        role_instruction = [
-            "Planner: outline a plan with sub-steps and required data.",
-            "Retriever: synthesize relevant facts and cite imaginary sources.",
-            "Reasoner: derive implications and edge cases.",
-            "Synthesizer: merge findings into a coherent brief.",
-            "Finalizer: produce an executive summary with recommendations."
-        ][min(step, 4)]
-
-        user_prompt = f"Step {step+1} / {cfg.agent_steps} – {role_instruction}\nContext:\n{rand_tokens(in_toks)}"
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        try:
-            output_tokens, ttft, e2e, content, status = await stream_chat(client, cfg, messages, out_toks)
-            tpot = max(1e-6, (e2e - ttft)) / max(1, output_tokens)
-            results.append(CallResult(
-                user_id=user_id, step_id=step, call_type="agent_step",
-                ttft_s=ttft, e2e_s=e2e, output_tokens=output_tokens,
-                output_rate_tps=output_tokens / max(1e-6, (e2e - ttft)),
-                tpot_s_per_tok=tpot, input_tokens=in_toks, http_status=status, ok=(200 <= status < 300)
-            ))
-        except Exception as e:
-            results.append(CallResult(
-                user_id=user_id, step_id=step, call_type="agent_step",
-                ttft_s=float("inf"), e2e_s=float("inf"), output_tokens=0,
-                output_rate_tps=0.0, tpot_s_per_tok=float("inf"),
-                input_tokens=in_toks, http_status=0, ok=False, error=str(e)
-            ))
-        # Think-time between steps
-        await asyncio.sleep(random.uniform(*cfg.think_time_range_s))
-    return results
-
-# ---------- Metrics scraping (optional) ----------
-
-async def scrape_metrics_periodically(cfg: TestConfig, stop_event: asyncio.Event):
-    if not cfg.metrics_url or not cfg.metrics_out_csv:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c, open(cfg.metrics_out_csv, "w") as f:
-            f.write("ts,metric_line\n")
-            while not stop_event.is_set():
-                ts = time.time()
-                try:
-                    r = await c.get(cfg.metrics_url)
-                    if r.status_code == 200:
-                        for line in r.text.splitlines():
-                            if not line or line.startswith("#"):
-                                continue
-                            f.write(f"{ts},{json.dumps(line)}\n")
-                except Exception:
-                    pass
-                await asyncio.wait_for(stop_event.wait(), timeout=cfg.metrics_period_s)
-    except Exception:
-        pass
-
-# ---------- Orchestration ----------
-
-def pct(values: List[float], p: float) -> float:
-    if not values:
-        return float("nan")
-    k = (len(values) - 1) * (p / 100.0)
-    f = int(k)
-    c = min(f + 1, len(values) - 1)
-    if f == c:
-        return sorted(values)[f]
-    d0 = sorted(values)[f] * (c - k)
-    d1 = sorted(values)[c] * (k - f)
-    return d0 + d1
-
-def summarize(results: List[CallResult], title: str):
-    ok = [r for r in results if r.ok]
-    failed = [r for r in results if not r.ok]
-    ttft = [r.ttft_s for r in ok]
-    e2e = [r.e2e_s for r in ok]
-    tpot = [r.tpot_s_per_tok for r in ok]
-    rate = [r.output_rate_tps for r in ok]
-    print(f"\n=== {title} ===")
-    print(f"calls: {len(results)} | ok: {len(ok)} | failed: {len(failed)}")
-    if failed[:3]:
-        print("sample errors:", [f.error for f in failed[:3]])
-    if ok:
-        print(f"TTFT  p50={statistics.median(ttft):.3f}s  p95={pct(ttft,95):.3f}s")
-        print(f"E2E   p50={statistics.median(e2e):.3f}s  p95={pct(e2e,95):.3f}s")
-        print(f"TPOT  p50={statistics.median(tpot):.4f}s/tok  p95={pct(tpot,95):.4f}s/tok")
-        print(f"Rate  p50={statistics.median(rate):.1f} tok/s  p95={pct(rate,95):.1f} tok/s")
-
-async def run_user(user_id: int, cfg: TestConfig, sem: asyncio.Semaphore, client: httpx.AsyncClient) -> List[CallResult]:
-    await asyncio.sleep(random.uniform(0, cfg.arrival_spread_s))  # jitter arrivals
-    async with sem:
-        # 65–70% heavy single + 30–35% agent flow by default
-        if random.random() < cfg.mix_agent_heavy:
-            res = await one_agent_flow(user_id, cfg, client)
-            return res
-        else:
-            res = await one_heavy_call(user_id, cfg, client)
-            return [res]
-
-async def main():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", required=True)
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--api-key", default=os.getenv("OPENAI_API_KEY", "EMPTY"))
-    ap.add_argument("--users", type=int, default=200)
-    ap.add_argument("--max-concurrency", type=int, default=200)
-    ap.add_argument("--mix", default="agent_heavy=0.30")
-    ap.add_argument("--arrival-spread-s", type=float, default=20.0)
-    ap.add_argument("--min-in", type=int, default=7000)
-    ap.add_argument("--max-in", type=int, default=10000)
-    ap.add_argument("--min-out", type=int, default=4000)
-    ap.add_argument("--max-out", type=int, default=6000)
-    ap.add_argument("--metrics-url", default=None)
-    ap.add_argument("--metrics-out", default=None)
-    ap.add_argument("--timeout-s", type=int, default=1800)
-    ap.add_argument("--force-json", action="store_true")
-    args = ap.parse_args()
-
-    mix_val = 0.30
-    if args.mix.startswith("agent_heavy="):
-        try:
-            mix_val = float(args.mix.split("=")[1])
-        except Exception:
-            pass
-
-    cfg = TestConfig(
-        base_url=args.base_url.rstrip("/"),
-        model=args.model,
-        api_key=args.api_key,
-        users=args.users,
-        max_concurrency=args.max_concurrency,
-        mix_agent_heavy=mix_val,
-        arrival_spread_s=args.arrival_spread_s,
-        min_input_tokens=args.min_in,
-        max_input_tokens=args.max_in,
-        min_output_tokens=args.min_out,
-        max_output_tokens=args.max_out,
-        metrics_url=args.metrics_url,
-        metrics_out_csv=args.metrics_out,
-        request_timeout_s=args.timeout_s,
-        force_json=bool(args.force_json),
+    return StreamingResponse(
+        token_stream(),
+        media_type="text/plain",
+        headers={"Cache-Control": "no-cache"},
     )
-
-    stop_event = asyncio.Event()
-    scrape_task = None
-    if cfg.metrics_url and cfg.metrics_out_csv:
-        scrape_task = asyncio.create_task(scrape_metrics_periodically(cfg, stop_event))
-
-    limits = httpx.Limits(max_keepalive_connections=cfg.max_concurrency, max_connections=cfg.max_concurrency)
-    timeout = httpx.Timeout(cfg.request_timeout_s)
-    async with httpx.AsyncClient(http2=False, limits=limits, timeout=timeout) as client:
-        sem = asyncio.Semaphore(cfg.max_concurrency)
-        tasks = [asyncio.create_task(run_user(uid, cfg, sem, client)) for uid in range(cfg.users)]
-        all_results_nested = await asyncio.gather(*tasks)
-        all_results = [item for sub in all_results_nested for item in sub]
-
-    stop_event.set()
-    if scrape_task:
-        with contextlib.suppress(Exception):
-            await scrape_task
-
-    # Summaries
-    summarize(all_results, "Overall")
-    summarize([r for r in all_results if r.call_type == "single"], "Single heavy calls")
-    summarize([r for r in all_results if r.call_type == "agent_step"], "Agent flow (per step)")
-
-    # Optional: write per-call CSV
-    out_csv = "llm_load_results.csv"
-    try:
-        import csv
-        with open(out_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(asdict(all_results[0]).keys()))
-            w.writeheader()
-            for r in all_results:
-                w.writerow(asdict(r))
-        print(f"\nSaved detailed results to {out_csv}")
-    except Exception:
-        pass
 
 if __name__ == "__main__":
-    import contextlib
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
-Usage
+app.js (React — simple page that streams)
 
-# Example: 200 users, heavy inputs/outputs, 30% agent-style 5-step flows,
-# scrape vLLM metrics every 2s to metrics.csv
-python llm_loadtest.py \
-  --base-url http://localhost:8000 \
-  --model Qwen/Qwen3-Next-80B-A3B-Instruct \
-  --api-key sk-your-key \
-  --users 200 \
-  --max-concurrency 200 \
-  --mix agent_heavy=0.35 \
-  --arrival-spread-s 20 \
-  --metrics-url http://localhost:8000/metrics \
-  --metrics-out vllm_metrics.csv
+// app.js
+import React, { useState, useRef } from "react";
 
-What you’ll get
-	•	Console: p50/p95 TTFT and E2E for:
-	•	all calls
-	•	the single heavy 7–10k → 4–6k calls
-	•	each agent step (aggregated)
-	•	CSV: raw per-call records to slice by step, user, status.
-	•	(Optional) metrics CSV from /metrics so you can line things up with tokens/s and queueing in Grafana/Prometheus. vLLM’s docs list the metric names to watch (prompt tokens/sec, generated tokens/sec, request latencies), which is what teams typically overlay with client p95s.  ￼
+export default function App() {
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const abortRef = useRef(null);
 
-⸻
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setOutput("");
+    setLoading(true);
 
-Notes & tips
-	•	TTFT vs E2E: prioritize p95 TTFT for perceived snappiness; E2E correlates with output length and TPOT. Latency ≈ TTFT + TPOT × output_tokens.  ￼
-	•	Tail focus: always report p95/p99, not just averages.  ￼
-	•	If your vLLM build doesn’t emit usage in stream, the script falls back to local tokenization (approx). For exact counts, you can also send a final non-stream request on a small eval set to sanity-check token counts.
-	•	During runs, open /metrics to confirm tokens/sec and request duration patterns; these are standard in vLLM’s Prometheus exporter and the example dashboards.  ￼
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-If you want me to tailor the step budgets exactly to your agent pipeline (e.g., 1 long planning + 3 tool reads + 1 final synthesis with MTP=2 on Qwen3-Next-80B), say the word and I’ll lock those ranges in.
+    try {
+      const res = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: input }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        setOutput((prev) => prev + decoder.decode(value));
+      }
+    } catch (err) {
+      setOutput((prev) => prev + `\n[error] ${err.message || err}`);
+    } finally {
+      setLoading(false);
+      abortRef.current = null;
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 800, margin: "40px auto", fontFamily: "ui-sans-serif, system-ui" }}>
+      <h1>Streaming Test</h1>
+      <form onSubmit={onSubmit} style={{ display: "flex", gap: 8 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask something…"
+          style={{ flex: 1, padding: 10, fontSize: 16 }}
+        />
+        <button type="submit" disabled={loading} style={{ padding: "10px 16px", fontSize: 16 }}>
+          {loading ? "Streaming…" : "Send"}
+        </button>
+        {loading && (
+          <button
+            type="button"
+            onClick={() => abortRef.current?.abort()}
+            style={{ padding: "10px 16px", fontSize: 16 }}
+          >
+            Cancel
+          </button>
+        )}
+      </form>
+
+      <div style={{ marginTop: 16, padding: 12, background: "#f7f7f7", borderRadius: 8 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Output</div>
+        <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>{output}</pre>
+      </div>
+    </div>
+  );
+}
+
+Quick run:
+	•	Backend: pip install fastapi uvicorn openai pydantic → python main.py
+	•	Frontend: place app.js as your root component (e.g., src/App.jsx) and run your React dev server.
+	•	Ensure OPENAI_API_KEY is set.
+
+(OpenAI’s SDK supports token streaming from Chat Completions; details in official docs.)  ￼
