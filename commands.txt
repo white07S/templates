@@ -1,140 +1,308 @@
-Here you go — minimal, to-the-point, and ready to paste.
+Got you. Here’s a tight, bank-ready controlled vocabulary you can plug into your enrichment layer so the LLM can only choose from limited, cluster-friendly options (with an “OTHER” escape hatch). It’s optimized for UBS-style NFR events/issues/controls.
 
-main.py (FastAPI, async streaming -> OpenAI)
+1) Categories & Codes (v1.0)
 
-# main.py
-import os
-import asyncio
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from openai import AsyncOpenAI
+Each item has a stable code + short label. Keep these under 25 per set for clean clustering.
 
-# Set OPENAI_API_KEY in your env
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+Processes (PRC-*)
+	•	PRC-KYC — Client Onboarding & KYC
+	•	PRC-TMON — Transaction Monitoring (AML)
+	•	PRC-SANC — Sanctions Screening
+	•	PRC-PAY — Payments Processing
+	•	PRC-TRX — Trade Execution
+	•	PRC-SETT — Trade Settlement
+	•	PRC-ORDM — Order Management
+	•	PRC-COLL — Collateral & Margin
+	•	PRC-CACT — Corporate Actions
+	•	PRC-MDEV — Model Development
+	•	PRC-MVAL — Model Validation
+	•	PRC-CHNG — Change & Release Management
+	•	PRC-IAM — Access / Identity & Access Mgmt
+	•	PRC-IR — Incident Response
+	•	PRC-BCDR — Business Continuity & DR
+	•	PRC-TPRM — Third-Party/Vendor Onboarding & Monitoring
+	•	PRC-DGOV — Data Governance & Records Mgmt
+	•	PRC-CLOUD — Cloud Provisioning & Configuration
+	•	PRC-VULN — Vulnerability & Patch Mgmt
+	•	PRC-FRAUD — Fraud Case Management
+	•	PRC-OTHER — Other Process
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # narrow in prod
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+People / Roles (PEO-*)
+	•	PEO-EXEC — Board / Executive
+	•	PEO-1LOD — 1st Line Business & Ops
+	•	PEO-RM — Relationship Manager / Advisor
+	•	PEO-TRDR — Trader / Dealer
+	•	PEO-OPS — Operations Analyst / Processor
+	•	PEO-ITDEV — IT Developer / Engineer
+	•	PEO-SRE — Platform / SRE
+	•	PEO-DENG — Data Engineer
+	•	PEO-DS — Data Scientist / Modeler
+	•	PEO-COMP — Compliance Officer
+	•	PEO-FC — Financial Crime (AML/Fraud)
+	•	PEO-RISK — Risk Manager (2nd Line)
+	•	PEO-LEGAL — Legal Counsel
+	•	PEO-IA — Internal Audit (3rd Line)
+	•	PEO-VENDOR — Vendor / Contractor
+	•	PEO-CLIENT — Client / Customer
+	•	PEO-REG — Regulator / External Auditor
+	•	PEO-BRANCH — Branch / Contact Center Staff
+	•	PEO-OTHER — Other Person/Role
 
-class ChatIn(BaseModel):
-    query: str
-    model: str | None = "gpt-4o-mini"  # pick any chat model you have access to
+Products (PROD-*)
+	•	PROD-CHECKING — Current/Checking Account
+	•	PROD-DEPOSIT — Savings/Time Deposit
+	•	PROD-CARD — Credit/Debit Card
+	•	PROD-LOAN — Personal/Consumer Loan
+	•	PROD-MORT — Mortgage
+	•	PROD-CORPLOAN — Corporate/Commercial Loan
+	•	PROD-PAYMENTS — Payments
+	•	PROD-TRADEF — Trade Finance (LC/BG)
+	•	PROD-FX — FX Spot/Forward
+	•	PROD-EQ — Equities (Cash)
+	•	PROD-DERIV — Derivatives (Listed/OTC)
+	•	PROD-STRUCPRD — Structured Products/Notes
+	•	PROD-FUND — Funds/ETFs
+	•	PROD-WEALTH — Discretionary/Advisory Mandate
+	•	PROD-CUSTODY — Custody/Safekeeping
+	•	PROD-PRIME — Prime Brokerage
+	•	PROD-CRYPTO — Digital Assets / Crypto
+	•	PROD-INS — Insurance / Bancassurance
+	•	PROD-OTHER — Other Product
 
-@app.post("/chat")
-async def chat(body: ChatIn):
-    async def token_stream():
-        # Stream tokens from OpenAI and yield them directly to the client
-        stream = await client.chat.completions.create(
-            model=body.model,
-            messages=[{"role": "user", "content": body.query}],
-            stream=True,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                # yield raw text chunks; browser will render progressively
-                yield delta.content
-            await asyncio.sleep(0)
+Services (SERV-*)
+	•	SERV-DIGIBANK — Online/Mobile Banking
+	•	SERV-TRADING — Trading Platform / OMS
+	•	SERV-RESEARCH — Research / Advisory Reports
+	•	SERV-REPORT — Client Reporting / Statements
+	•	SERV-SETTLE — Custody & Settlement Services
+	•	SERV-CASHMGT — Cash Mgmt / Treasury Services
+	•	SERV-PAY — Payments/Transfers Service
+	•	SERV-KYC — Onboarding/KYC Service
+	•	SERV-CHGBK — Dispute / Chargeback Handling
+	•	SERV-COMPL — Complaints Handling
+	•	SERV-TAXREP — Tax Reporting (FATCA/CRS)
+	•	SERV-CACT — Corporate Actions Service
+	•	SERV-REFDATA — Reference/Data Provisioning
+	•	SERV-MRM — Model Risk Mgmt Service
+	•	SERV-IR — Incident/Breach Response Service
+	•	SERV-IAM — Access / IAM Service
+	•	SERV-TPRM — Vendor Mgmt Service
+	•	SERV-BCDR — BCDR Service
+	•	SERV-OTHER — Other Service
 
-    return StreamingResponse(
-        token_stream(),
-        media_type="text/plain",
-        headers={"Cache-Control": "no-cache"},
-    )
+Regulations / Standards (REG-*)
+	•	REG-GDPR — GDPR
+	•	REG-DORA — DORA
+	•	REG-MIFID2 — MiFID II
+	•	REG-EMIR — EMIR
+	•	REG-MAR — MAR
+	•	REG-SFDR — SFDR
+	•	REG-AMLD6 — EU AMLD6
+	•	REG-FATF — FATF Recommendations
+	•	REG-SANCTIONS — OFAC/EU/UK Sanctions
+	•	REG-PSD2 — PSD2 / PSR (incl. PSD3/PSR evolution)
+	•	REG-NIS2 — NIS2
+	•	REG-BCBS239 — BCBS 239 (Risk Data Aggregation & Reporting)
+	•	REG-SOX404 — SOX 404 (if applicable)
+	•	REG-BCBS-OPRES — Basel Op Resilience Principles
+	•	REG-EBA-ICT — EBA ICT & Security Guidelines
+	•	REG-ESMA-SUIT — ESMA Suitability Guidelines
+	•	REG-FINMA-OUTS — FINMA Outsourcing (e.g., Circ. 2018/3)
+	•	REG-FCA-OPRES — UK FCA Op Resilience / ICARA
+	•	REG-REGBI — SEC/FINRA Reg BI
+	•	REG-PCI — PCI DSS
+	•	REG-OTHER — Other Regulation/Standard
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+⸻
 
-app.js (React — simple page that streams)
+2) What goes where (fast decision rules)
+	•	Process vs Service vs Product
+	•	Process = how the bank operates internally (flows, controls, ops steps).
+	•	Service = what the bank delivers as a service capability (often platform/team operated).
+	•	Product = what the client/instrument is (account, loan, card, derivative).
+	•	People = role archetypes, never individuals.
+	•	Regulation = name or article references map to one umbrella code.
 
-// app.js
-import React, { useState, useRef } from "react";
+If in doubt → choose OTHER and capture free_text for future curation.
 
-export default function App() {
-  const [input, setInput] = useState("");
-  const [output, setOutput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const abortRef = useRef(null);
+⸻
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    setOutput("");
-    setLoading(true);
+3) Output contract (strict JSON)
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+Have the model return only this schema. You can validate and reject otherwise.
 
-    try {
-      const res = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: input }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        const msg = await res.text().catch(() => "");
-        throw new Error(msg || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        setOutput((prev) => prev + decoder.decode(value));
-      }
-    } catch (err) {
-      setOutput((prev) => prev + `\n[error] ${err.message || err}`);
-    } finally {
-      setLoading(false);
-      abortRef.current = null;
+{
+  "items": [
+    {
+      "category": "process|people|product|service|regulation",
+      "code": "PRC-KYC|PEO-RISK|PROD-CARD|SERV-IAM|REG-GDPR|...|*-OTHER",
+      "label": "Human readable label",
+      "evidence": "exact text span from source",
+      "char_span": [100, 125],
+      "confidence": 0.0,
+      "free_text": "only if code is *-OTHER or to add qualifiers"
     }
-  };
-
-  return (
-    <div style={{ maxWidth: 800, margin: "40px auto", fontFamily: "ui-sans-serif, system-ui" }}>
-      <h1>Streaming Test</h1>
-      <form onSubmit={onSubmit} style={{ display: "flex", gap: 8 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask something…"
-          style={{ flex: 1, padding: 10, fontSize: 16 }}
-        />
-        <button type="submit" disabled={loading} style={{ padding: "10px 16px", fontSize: 16 }}>
-          {loading ? "Streaming…" : "Send"}
-        </button>
-        {loading && (
-          <button
-            type="button"
-            onClick={() => abortRef.current?.abort()}
-            style={{ padding: "10px 16px", fontSize: 16 }}
-          >
-            Cancel
-          </button>
-        )}
-      </form>
-
-      <div style={{ marginTop: 16, padding: 12, background: "#f7f7f7", borderRadius: 8 }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Output</div>
-        <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>{output}</pre>
-      </div>
-    </div>
-  );
+  ]
 }
 
-Quick run:
-	•	Backend: pip install fastapi uvicorn openai pydantic → python main.py
-	•	Frontend: place app.js as your root component (e.g., src/App.jsx) and run your React dev server.
-	•	Ensure OPENAI_API_KEY is set.
+Validation rules
+	•	code must be in the allowed list for that category (or *-OTHER).
+	•	If *-OTHER, free_text required.
+	•	confidence ∈ [0,1].
+	•	Deduplicate identical (category, code, evidence) per record.
 
-(OpenAI’s SDK supports token streaming from Chat Completions; details in official docs.)  ￼
+⸻
+
+4) Synonym & alias mapping (kept tight)
+
+Use these to normalize messy text to your codes before/after LLM:
+	•	PRC-KYC: ["kyc","cdd","edd","client onboarding","periodic review","kyc review"]
+	•	PRC-TMON: ["transaction monitoring","alerts review","aml monitoring"]
+	•	PRC-SANC: ["sanctions","screening","watchlist","pep sanctions"]
+	•	PRC-IAM: ["access mgmt","identity","privileged access","rbac","entitlement"]
+	•	PRC-CHNG: ["change mgmt","release","deployment","change ticket","cab"]
+	•	SERV-TRADING: ["trading platform","oms","execution platform","order mgmt system"]
+	•	PROD-DERIV: ["swap","option","futures","otc","listed derivatives"]
+	•	REG-GDPR: ["gdpr","art.","article","personal data","data subject"]
+	•	REG-DORA: ["dora","ict risk","ict testing"]
+	•	REG-PSD2: ["psd2","psr","open banking","strong customer authentication","sca"]
+	•	…(extend per bank lexicon; keep each list <10 items)
+
+⸻
+
+5) Minimal Python you can drop in
+
+Allowed sets (source of truth)
+
+ALLOWED = {
+    "process": {
+        "PRC-KYC":"Client Onboarding & KYC","PRC-TMON":"Transaction Monitoring (AML)",
+        "PRC-SANC":"Sanctions Screening","PRC-PAY":"Payments Processing","PRC-TRX":"Trade Execution",
+        "PRC-SETT":"Trade Settlement","PRC-ORDM":"Order Management","PRC-COLL":"Collateral & Margin",
+        "PRC-CACT":"Corporate Actions","PRC-MDEV":"Model Development","PRC-MVAL":"Model Validation",
+        "PRC-CHNG":"Change & Release Management","PRC-IAM":"Access / Identity & Access Mgmt",
+        "PRC-IR":"Incident Response","PRC-BCDR":"Business Continuity & DR","PRC-TPRM":"Third-Party/Vendor Onboarding & Monitoring",
+        "PRC-DGOV":"Data Governance & Records Mgmt","PRC-CLOUD":"Cloud Provisioning & Configuration",
+        "PRC-VULN":"Vulnerability & Patch Mgmt","PRC-FRAUD":"Fraud Case Management","PRC-OTHER":"Other Process"
+    },
+    "people": {
+        "PEO-EXEC":"Board / Executive","PEO-1LOD":"1st Line Business & Ops","PEO-RM":"Relationship Manager / Advisor",
+        "PEO-TRDR":"Trader / Dealer","PEO-OPS":"Operations Analyst / Processor","PEO-ITDEV":"IT Developer / Engineer",
+        "PEO-SRE":"Platform / SRE","PEO-DENG":"Data Engineer","PEO-DS":"Data Scientist / Modeler","PEO-COMP":"Compliance Officer",
+        "PEO-FC":"Financial Crime (AML/Fraud)","PEO-RISK":"Risk Manager (2nd Line)","PEO-LEGAL":"Legal Counsel",
+        "PEO-IA":"Internal Audit (3rd Line)","PEO-VENDOR":"Vendor / Contractor","PEO-CLIENT":"Client / Customer",
+        "PEO-REG":"Regulator / External Auditor","PEO-BRANCH":"Branch / Contact Center Staff","PEO-OTHER":"Other Person/Role"
+    },
+    "product": {
+        "PROD-CHECKING":"Current/Checking Account","PROD-DEPOSIT":"Savings/Time Deposit","PROD-CARD":"Credit/Debit Card",
+        "PROD-LOAN":"Personal/Consumer Loan","PROD-MORT":"Mortgage","PROD-CORPLOAN":"Corporate/Commercial Loan",
+        "PROD-PAYMENTS":"Payments","PROD-TRADEF":"Trade Finance (LC/BG)","PROD-FX":"FX Spot/Forward","PROD-EQ":"Equities (Cash)",
+        "PROD-DERIV":"Derivatives (Listed/OTC)","PROD-STRUCPRD":"Structured Products/Notes","PROD-FUND":"Funds/ETFs",
+        "PROD-WEALTH":"Discretionary/Advisory Mandate","PROD-CUSTODY":"Custody/Safekeeping","PROD-PRIME":"Prime Brokerage",
+        "PROD-CRYPTO":"Digital Assets / Crypto","PROD-INS":"Insurance / Bancassurance","PROD-OTHER":"Other Product"
+    },
+    "service": {
+        "SERV-DIGIBANK":"Online/Mobile Banking","SERV-TRADING":"Trading Platform / OMS","SERV-RESEARCH":"Research / Advisory Reports",
+        "SERV-REPORT":"Client Reporting / Statements","SERV-SETTLE":"Custody & Settlement Services","SERV-CASHMGT":"Cash Mgmt / Treasury Services",
+        "SERV-PAY":"Payments/Transfers Service","SERV-KYC":"Onboarding/KYC Service","SERV-CHGBK":"Dispute / Chargeback Handling",
+        "SERV-COMPL":"Complaints Handling","SERV-TAXREP":"Tax Reporting (FATCA/CRS)","SERV-CACT":"Corporate Actions Service",
+        "SERV-REFDATA":"Reference/Data Provisioning","SERV-MRM":"Model Risk Mgmt Service","SERV-IR":"Incident/Breach Response Service",
+        "SERV-IAM":"Access / IAM Service","SERV-TPRM":"Vendor Mgmt Service","SERV-BCDR":"BCDR Service","SERV-OTHER":"Other Service"
+    },
+    "regulation": {
+        "REG-GDPR":"GDPR","REG-DORA":"DORA","REG-MIFID2":"MiFID II","REG-EMIR":"EMIR","REG-MAR":"MAR","REG-SFDR":"SFDR",
+        "REG-AMLD6":"EU AMLD6","REG-FATF":"FATF Recommendations","REG-SANCTIONS":"OFAC/EU/UK Sanctions",
+        "REG-PSD2":"PSD2 / PSR","REG-NIS2":"NIS2","REG-BCBS239":"BCBS 239","REG-SOX404":"SOX 404","REG-BCBS-OPRES":"Basel Op Resilience",
+        "REG-EBA-ICT":"EBA ICT & Security","REG-ESMA-SUIT":"ESMA Suitability","REG-FINMA-OUTS":"FINMA Outsourcing",
+        "REG-FCA-OPRES":"UK FCA Op Resilience / ICARA","REG-REGBI":"Reg BI","REG-PCI":"PCI DSS","REG-OTHER":"Other Regulation/Standard"
+    }
+}
+
+Tiny normalizer (regex/keyword → code)
+
+import re
+
+ALIASES = {
+    "process": {
+        "PRC-KYC": [r"\bkyc\b", r"client onboarding", r"\bcdd\b", r"\bedd\b", r"periodic review"],
+        "PRC-IAM": [r"identity\b", r"\biam\b", r"access (mgmt|management)", r"\brbac\b", r"entitlement"],
+        "PRC-CHNG": [r"change (mgmt|management)", r"release", r"deployment", r"\bcab\b"],
+        # ...add high-signal patterns, keep short
+    },
+    "regulation": {
+        "REG-GDPR": [r"\bgdpr\b", r"data subject", r"article \d+"],
+        "REG-DORA": [r"\bdora\b", r"\bict\b"],
+        "REG-PSD2": [r"\bpsd2\b", r"\bpsr\b", r"strong customer authentication", r"\bsca\b"],
+        # ...
+    }
+}
+
+def normalize_hint(category: str, text: str) -> str | None:
+    txt = text.lower()
+    for code, pats in ALIASES.get(category, {}).items():
+        if any(re.search(p, txt) for p in pats):
+            return code
+    return None
+
+Use this before calling the LLM to suggest a default, and after to override obvious matches. If nothing matches, let the LLM pick; if still unclear, set *-OTHER with free_text.
+
+⸻
+
+6) Prompt guardrails (copy/paste)
+
+You are extracting ONLY from the controlled lists below.
+For each detected mention, choose exactly one {category, code} from the list. 
+If none fits, choose the *-OTHER code and provide a short free_text.
+
+DO NOT invent new codes or labels. 
+Return strictly the JSON schema provided.
+
+Controlled lists:
+- process: [PRC-KYC, PRC-TMON, PRC-SANC, PRC-PAY, PRC-TRX, PRC-SETT, PRC-ORDM, PRC-COLL, PRC-CACT, PRC-MDEV, PRC-MVAL, PRC-CHNG, PRC-IAM, PRC-IR, PRC-BCDR, PRC-TPRM, PRC-DGOV, PRC-CLOUD, PRC-VULN, PRC-FRAUD, PRC-OTHER]
+- people:  [PEO-EXEC, PEO-1LOD, PEO-RM, PEO-TRDR, PEO-OPS, PEO-ITDEV, PEO-SRE, PEO-DENG, PEO-DS, PEO-COMP, PEO-FC, PEO-RISK, PEO-LEGAL, PEO-IA, PEO-VENDOR, PEO-CLIENT, PEO-REG, PEO-BRANCH, PEO-OTHER]
+- product: [PROD-CHECKING, PROD-DEPOSIT, PROD-CARD, PROD-LOAN, PROD-MORT, PROD-CORPLOAN, PROD-PAYMENTS, PROD-TRADEF, PROD-FX, PROD-EQ, PROD-DERIV, PROD-STRUCPRD, PROD-FUND, PROD-WEALTH, PROD-CUSTODY, PROD-PRIME, PROD-CRYPTO, PROD-INS, PROD-OTHER]
+- service: [SERV-DIGIBANK, SERV-TRADING, SERV-RESEARCH, SERV-REPORT, SERV-SETTLE, SERV-CASHMGT, SERV-PAY, SERV-KYC, SERV-CHGBK, SERV-COMPL, SERV-TAXREP, SERV-CACT, SERV-REFDATA, SERV-MRM, SERV-IR, SERV-IAM, SERV-TPRM, SERV-BCDR, SERV-OTHER]
+- regulation: [REG-GDPR, REG-DORA, REG-MIFID2, REG-EMIR, REG-MAR, REG-SFDR, REG-AMLD6, REG-FATF, REG-SANCTIONS, REG-PSD2, REG-NIS2, REG-BCBS239, REG-SOX404, REG-BCBS-OPRES, REG-EBA-ICT, REG-ESMA-SUIT, REG-FINMA-OUTS, REG-FCA-OPRES, REG-REGBI, REG-PCI, REG-OTHER]
+
+
+⸻
+
+7) Example (from an NFR issue)
+
+“During the quarterly KYC review, a vendor engineer had privileged access to the trading platform, breaching GDPR data minimization.”
+
+{
+  "items": [
+    {"category":"process","code":"PRC-KYC","label":"Client Onboarding & KYC",
+     "evidence":"KYC review","char_span":[18,28],"confidence":0.92},
+    {"category":"process","code":"PRC-IAM","label":"Access / Identity & Access Mgmt",
+     "evidence":"privileged access","char_span":[49,67],"confidence":0.88},
+    {"category":"service","code":"SERV-TRADING","label":"Trading Platform / OMS",
+     "evidence":"trading platform","char_span":[78,94],"confidence":0.86},
+    {"category":"regulation","code":"REG-GDPR","label":"GDPR",
+     "evidence":"GDPR","char_span":[106,110],"confidence":0.94},
+    {"category":"people","code":"PEO-VENDOR","label":"Vendor / Contractor",
+     "evidence":"vendor engineer","char_span":[35,50],"confidence":0.83}
+  ]
+}
+
+
+⸻
+
+8) Storage & clustering (quick spec)
+	•	Table: enriched_entities(record_id, category, code, label, evidence, start_idx, end_idx, confidence, free_text)
+	•	PK: (record_id, category, code, start_idx)
+	•	Index on (category, code) for fast counts/clusters.
+	•	Clustering: group by category, code. Use free_text only for within-code sub-clusters (optional embedding).
+	•	QA dashboards: show top *-OTHER by frequency → curate into new codes if they repeat.
+
+⸻
+
+9) How to extend safely
+	•	Only add new codes if OTHER hits are >1–2% for that category over 2–3 weeks.
+	•	Keep each list ≤ 25 to avoid fragmentation.
+	•	Version your lists (v1.0, v1.1) and store version with outputs.
+
+⸻
+
+If you want, I can produce a tiny FastAPI POST /enrich stub (with validator + alias normalizer) that enforces this contract and drops straight into your Milvus/Postgres pipeline.
